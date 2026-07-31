@@ -250,11 +250,6 @@ function tierRank(seg){
   const m = String(seg).match(/\d+/);
   return m ? parseInt(m[0],10) : 9e9;
 }
-const SEG_ORDER = ['Implementation','Mid-Market','SMB+Emerging'];
-function segRank(s){
-  const i = SEG_ORDER.indexOf(s);
-  return i === -1 ? (s === 'Unassigned' ? 99 : 50) : i;
-}
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // ── sparkline (single-hue, inline SVG) ────────────────────────────────────────
@@ -287,7 +282,7 @@ async function fetchData(){
   try {
     const [segRows, segHist, repRows] = await Promise.all([
       sqlQuery(
-        `SELECT captured_at, run_period, type, unit_tier, event_type, rep_segment,
+        `SELECT captured_at, run_period, type, unit_tier, event_type,
                 entity_count, avail_24h, avail_48h, next_available_at,
                 avg_days_to_avail, slots_48h_after_first
            FROM capacity.ob_calendar_segment_daily
@@ -295,14 +290,14 @@ async function fetchData(){
             AND captured_at = (SELECT max(captured_at) FROM capacity.ob_calendar_segment_daily WHERE calendar_set = $1)`,
         [CALENDAR_SET]),
       sqlQuery(
-        `SELECT captured_at, type, unit_tier, event_type, rep_segment,
+        `SELECT captured_at, type, unit_tier, event_type,
                 avail_24h, avail_48h, next_available_at, avg_days_to_avail
            FROM capacity.ob_calendar_segment_daily
           WHERE calendar_set = $1 AND captured_at >= now() - interval '14 days'
           ORDER BY captured_at`,
         [CALENDAR_SET]),
       sqlQuery(
-        `SELECT captured_at, type, name, event_type, unit_tier, rep_segment,
+        `SELECT captured_at, type, name, event_type, unit_tier,
                 calendly_username, rep_email, scheduling_url,
                 avail_24h, avail_48h, next_available_at, days_until_available,
                 slots_48h_after_first, slot_count
@@ -327,50 +322,19 @@ function rrTiers(){
   return segLatest.filter(r=>r.type==='RR')
     .sort((a,b)=>tierRank(a.unit_tier)-tierRank(b.unit_tier));
 }
-// Specialist rep segments: rolled up from the event_type x rep_segment grain.
-// Slot counts are deliberately NOT summed across event types — a rep's 12
-// calendars draw on one underlying availability, so summing would overcount.
-function repSegments(){
-  const by = {};
-  for(const r of segLatest.filter(r=>r.type==='SPECIALIST')){
-    const seg = r.rep_segment || 'Unassigned';
-    const g = by[seg] ??= { segment:seg, eventTypes:0, covered:0, bestIso:null, daysSum:0, daysN:0 };
-    g.eventTypes += 1;
-    const iso = r.next_available_at;
-    if(iso){
-      g.covered += 1;
-      if(!g.bestIso || new Date(iso) < new Date(g.bestIso)) g.bestIso = iso;
-    }
-    const d = num(r.avg_days_to_avail);
-    if(d !== null){ g.daysSum += d; g.daysN += 1; }
-  }
-  // reps come from the detail grain
-  for(const seg of Object.keys(by)){
-    const reps = new Set(repLatest.filter(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===seg).map(r=>r.name));
-    by[seg].reps = reps.size;
-    by[seg].repsToday = [...reps].filter(n=>{
-      const best = repBest(n);
-      return daysUntil(best, capturedAt) === 0;
-    }).length;
-  }
-  return Object.values(by).sort((a,b)=>segRank(a.segment)-segRank(b.segment));
-}
 // A rep's earliest slot across all of their event types.
 function repBest(name){
   const isos = repLatest.filter(r=>r.name===name).map(r=>r.next_available_at).filter(Boolean).sort();
   return isos[0] || null;
 }
-function repsIn(segment){
-  const names = [...new Set(repLatest
-    .filter(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===segment)
-    .map(r=>r.name))];
+function allReps(){
+  const names = [...new Set(repLatest.filter(r=>r.type==='SPECIALIST').map(r=>r.name))];
   return names.map(name=>{
-    const rows = repLatest.filter(r=>r.name===name);
+    const rows = repLatest.filter(r=>r.name===name && r.type==='SPECIALIST');
     const best = repBest(name);
     return {
       name,
       username: rows[0]?.calendly_username || '',
-      email: rows[0]?.rep_email || '',
       eventTypes: rows.length,
       with24: rows.filter(r=>(num(r.avail_24h)||0) > 0).length,
       with48: rows.filter(r=>(num(r.avail_48h)||0) > 0).length,
@@ -402,7 +366,6 @@ function route(){
   const [view, ...rest] = h.split('/');
   const key = rest.join('/');
   if(view === 'tier'    && key) return renderTier(key);
-  if(view === 'segment' && key) return renderSegment(key);
   if(view === 'rep'     && key) return renderRep(key);
   renderOverview();
 }
@@ -425,17 +388,15 @@ function renderOverview(){
   setHead('Onboarding Availability', 'Next-slot availability across the onboarding calendars, by segment.');
 
   const tiers = rrTiers();
-  const segs  = repSegments();
+  const reps  = allReps();
   const allRepNames = [...new Set(repLatest.filter(r=>r.type==='SPECIALIST').map(r=>r.name))];
 
   const tiersToday = tiers.filter(t=>daysUntil(t.next_available_at, capturedAt)===0).length;
   const repsToday  = allRepNames.filter(n=>daysUntil(repBest(n), capturedAt)===0).length;
   const soonest = [...segLatest.map(r=>r.next_available_at), ...repLatest.map(r=>r.next_available_at)]
     .filter(Boolean).sort()[0] || null;
-  const breach = [
-    ...tiers.map(t=>daysUntil(t.next_available_at, capturedAt)),
-    ...segs.map(s=>daysUntil(s.bestIso, capturedAt)),
-  ].filter(d=>d===null || d>THRESHOLD).length;
+  const breach = tiers.map(t=>daysUntil(t.next_available_at, capturedAt))
+    .filter(d=>d===null || d>THRESHOLD).length;
 
   const kpis = `
     <div class="kpis">
@@ -457,7 +418,7 @@ function renderOverview(){
       <div class="kpi ${breach>0?'alert':'ok'}">
         <div class="label">Over SLA</div>
         <div class="value">${breach}</div>
-        <div class="sub">segments past ${THRESHOLD}-day threshold</div>
+        <div class="sub">unit tiers past ${THRESHOLD}-day threshold</div>
       </div>
     </div>`;
 
@@ -481,28 +442,20 @@ function renderOverview(){
       </div>`;
   }).join('');
 
-  // ── specialist segment cards ──
-  const segCards = segs.map(s=>{
-    const d = daysUntil(s.bestIso, capturedAt), hs = health(d);
-    const runs = histFor(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===s.segment, 'avg_days_to_avail');
-    const avgDays = s.daysN ? (s.daysSum/s.daysN).toFixed(1) : '—';
-    return `
-      <div class="card clickable ${hs.k}" onclick="location.hash='#/segment/${encodeURIComponent(s.segment)}'">
-        <div class="card-top">
-          <div class="tier">${esc(s.segment)}<span class="tier-sub">${s.reps} specialist${s.reps===1?'':'s'}</span></div>
-          <span class="badge ${hs.k}">${hs.icon} ${hs.label}</span>
-        </div>
-        <div class="next-line">Earliest slot: <strong>${relNext(s.bestIso)}</strong></div>
-        <div class="metrics">
-          <div class="metric"><div class="m-val">${s.repsToday}<span style="font-size:.85rem;color:var(--dim)">/${s.reps}</span></div><div class="m-lab">Free today</div></div>
-          <div class="metric"><div class="m-val">${s.covered}<span style="font-size:.85rem;color:var(--dim)">/${s.eventTypes}</span></div><div class="m-lab">Event types open</div></div>
-          <div class="metric"><div class="m-val">${avgDays}</div><div class="m-lab">Avg days out</div></div>
-        </div>
-        ${sparkline(runs, 'avg days to slot · 14d')}
-      </div>`;
+  // ── specialists, flat (no market-segment grouping) ──
+  const repRows = reps.map(r=>{
+    const hs = health(r.days);
+    return `<tr class="clickable" onclick="location.hash='#/rep/${encodeURIComponent(r.name)}'">
+      <td><span class="dot ${hs.k}"></span><span class="rowlink">${esc(r.name)}</span></td>
+      <td style="color:var(--muted)">${esc(r.username)}</td>
+      <td class="num">${r.days ?? '—'}</td>
+      <td class="num">${r.with24}<span style="color:var(--dim)">/${r.eventTypes}</span></td>
+      <td class="num">${r.with48}<span style="color:var(--dim)">/${r.eventTypes}</span></td>
+      <td style="text-align:right;color:var(--muted)">${etDateTime(r.best)}</td>
+      <td><span class="badge ${hs.k}">${hs.icon} ${hs.label}</span></td></tr>`;
   }).join('');
 
-  // ── all-segments table ──
+  // ── unit tier table ──
   const tableRows = [
     ...tiers.map(t=>{
       const d = daysUntil(t.next_available_at, capturedAt), hs = health(d);
@@ -514,16 +467,6 @@ function renderOverview(){
         <td class="num">${num(t.avail_48h) ?? '—'}</td>
         <td style="text-align:right;color:var(--muted)">${etDateTime(t.next_available_at)}</td></tr>`;
     }),
-    ...segs.map(s=>{
-      const d = daysUntil(s.bestIso, capturedAt), hs = health(d);
-      return `<tr class="clickable" onclick="location.hash='#/segment/${encodeURIComponent(s.segment)}'">
-        <td><span class="dot ${hs.k}"></span>Specialist</td>
-        <td class="rowlink">${esc(s.segment)}</td>
-        <td class="num">${d ?? '—'}</td>
-        <td class="num">—</td>
-        <td class="num">—</td>
-        <td style="text-align:right;color:var(--muted)">${etDateTime(s.bestIso)}</td></tr>`;
-    })
   ].join('');
 
   document.getElementById('content').innerHTML = `
@@ -532,8 +475,15 @@ function renderOverview(){
     <div class="section-title">Sales handoff — round-robin <span class="count">· ${tiers.length} calendars · sorted by unit count · click to drill in</span></div>
     <div class="cards">${tierCards || '<div class="state-msg">No round-robin rows in the latest run.</div>'}</div>
 
-    <div class="section-title">Specialist coverage <span class="count">· ${segs.length} segments · click a segment to see each specialist</span></div>
-    <div class="cards">${segCards || '<div class="state-msg">No specialist rows in the latest run.</div>'}</div>
+    <div class="section-title">Specialists <span class="count">· ${reps.length} people · worst availability first · click a name for their calendars</span></div>
+    <div class="panel">
+      <div class="scroll"><table>
+        <thead><tr><th>Specialist</th><th>Calendly</th><th class="num">Days to slot</th>
+          <th class="num">Open ≤24h</th><th class="num">Open ≤48h</th>
+          <th style="text-align:right">Earliest (ET)</th><th>Status</th></tr></thead>
+        <tbody>${repRows || '<tr><td colspan="7" style="color:var(--muted)">No specialist rows in the latest run.</td></tr>'}</tbody>
+      </table></div>
+    </div>
 
     ${eventTypesPerRep() > 1 ? `<div class="note">
       Round-robin slot counts are per calendar, so they add up. Specialist counts are
@@ -558,11 +508,11 @@ function renderOverview(){
     </div>
 
     <div class="panel">
-      <div class="panel-head"><div><h3>All segments — latest run</h3></div></div>
+      <div class="panel-head"><div><h3>All unit tiers — latest run</h3></div></div>
       <div style="overflow-x:auto">
       <table>
         <thead><tr>
-          <th>Kind</th><th>Segment</th><th class="num">Days to slot</th>
+          <th>Kind</th><th>Unit tier</th><th class="num">Days to slot</th>
           <th class="num">Next 24h</th><th class="num">Next 48h</th>
           <th style="text-align:right">Next available (ET)</th>
         </tr></thead>
@@ -600,7 +550,7 @@ function renderTier(tier){
       <td style="text-align:right;color:var(--muted)">${etDateTime(r.next_available_at)}</td></tr>`).join('');
 
   document.getElementById('content').innerHTML = `
-    <div class="crumbs"><a href="#/">← All segments</a><span class="sep">/</span><span>${esc(tier)}</span></div>
+    <div class="crumbs"><a href="#/">← Overview</a><span class="sep">/</span><span>${esc(tier)}</span></div>
     <div class="kpis">
       <div class="kpi"><div class="label">Status</div><div class="value" style="font-size:1.35rem">${hs.icon} ${hs.label}</div><div class="sub">vs ${THRESHOLD}-day SLA</div></div>
       <div class="kpi"><div class="label">Next slot</div><div class="value" style="font-size:1.35rem">${relNext(row.next_available_at)}</div><div class="sub">${etDateTime(row.next_available_at)} ET</div></div>
@@ -610,8 +560,8 @@ function renderTier(tier){
 
     <div class="note">
       This is a pooled round-robin — bookings distribute across whoever is in the Calendly
-      pool, so there is no single owner to drill into. For individual specialists use
-      <a href="#/" style="color:var(--data)">Specialist coverage</a>.
+      pool, so there is no single owner to drill into. Individual specialists are listed
+      <a href="#/" style="color:var(--data)">on the overview</a>.
       ${cal ? `Calendar: <code>${esc(cal.scheduling_url || cal.event_type || '')}</code>` : ''}
     </div>
 
@@ -632,93 +582,12 @@ function renderTier(tier){
   drawSeries(runs.map(r=>num(r.avail_24h)), runs.map(r=>r.captured_at), 'Open slots · next 24h');
 }
 
-// ── LEVEL 2b — one specialist segment (the manager view) ──────────────────────
-function renderSegment(segment){
-  const reps = repsIn(segment);
-  if(!reps.length){ location.hash = '#/'; return; }
-  setHead(segment, `Each specialist in ${segment}, worst availability first.`);
-
-  const today = reps.filter(r=>r.days===0).length;
-  const noSlots = reps.filter(r=>r.days===null).length;
-  const best = reps.map(r=>r.best).filter(Boolean).sort()[0] || null;
-
-  const repRows = reps.map(r=>{
-    const hs = health(r.days);
-    return `<tr class="clickable" onclick="location.hash='#/rep/${encodeURIComponent(r.name)}'">
-      <td><span class="dot ${hs.k}"></span><span class="rowlink">${esc(r.name)}</span></td>
-      <td style="color:var(--muted)">${esc(r.username)}</td>
-      <td class="num">${r.days ?? '—'}</td>
-      <td class="num">${r.with24}<span style="color:var(--dim)">/${r.eventTypes}</span></td>
-      <td class="num">${r.with48}<span style="color:var(--dim)">/${r.eventTypes}</span></td>
-      <td style="text-align:right;color:var(--muted)">${etDateTime(r.best)}</td>
-      <td><span class="badge ${hs.k}">${hs.icon} ${hs.label}</span></td></tr>`;
-  }).join('');
-
-  // event-type breakdown inside this segment
-  const evRows = segLatest
-    .filter(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===segment)
-    .sort((a,b)=>String(a.event_type).localeCompare(String(b.event_type)))
-    .map(r=>{
-      const d = daysUntil(r.next_available_at, capturedAt), hs = health(d);
-      return `<tr>
-        <td><span class="dot ${hs.k}"></span>${esc(r.event_type)}</td>
-        <td class="num">${num(r.entity_count) ?? '—'}</td>
-        <td class="num">${d ?? '—'}</td>
-        <td class="num">${num(r.avail_24h) ?? '—'}</td>
-        <td class="num">${num(r.avail_48h) ?? '—'}</td>
-        <td style="text-align:right;color:var(--muted)">${etDateTime(r.next_available_at)}</td></tr>`;
-    }).join('');
-
-  const runs = segHistory.filter(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===segment);
-  const stamps = [...new Set(runs.map(r=>r.captured_at))].sort();
-
-  document.getElementById('content').innerHTML = `
-    <div class="crumbs"><a href="#/">← All segments</a><span class="sep">/</span><span>${esc(segment)}</span></div>
-    <div class="kpis">
-      <div class="kpi ${today===reps.length?'ok':''}"><div class="label">Free today</div>
-        <div class="value">${today}<span style="font-size:1rem;color:var(--dim);font-weight:600">/${reps.length}</span></div>
-        <div class="sub">specialists with a same-day slot</div></div>
-      <div class="kpi"><div class="label">Earliest slot</div><div class="value" style="font-size:1.35rem">${relNext(best)}</div><div class="sub">across the segment</div></div>
-      <div class="kpi ${noSlots>0?'alert':'ok'}"><div class="label">Fully booked</div><div class="value">${noSlots}</div><div class="sub">no slot in the 7-day horizon</div></div>
-      <div class="kpi"><div class="label">Specialists</div><div class="value">${reps.length}</div><div class="sub">${reps.reduce((s,r)=>s+r.eventTypes,0)} calendars tracked</div></div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><div><h3>Specialists</h3><p>Worst availability first — click a name for their calendars</p></div></div>
-      <div style="overflow-x:auto"><table>
-        <thead><tr><th>Specialist</th><th>Calendly</th><th class="num">Days to slot</th>
-          <th class="num">Open ≤24h</th><th class="num">Open ≤48h</th>
-          <th style="text-align:right">Earliest (ET)</th><th>Status</th></tr></thead>
-        <tbody>${repRows}</tbody>
-      </table></div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><div><h3>Avg days to slot</h3><p>${esc(segment)} · last 14 days</p></div></div>
-      <div class="chartbox"><canvas id="chart"></canvas></div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><div><h3>By event type</h3><p>Latest run · ${esc(segment)}</p></div></div>
-      <div style="overflow-x:auto"><table>
-        <thead><tr><th>Event type</th><th class="num">Specialists</th><th class="num">Days to slot</th>
-          <th class="num">Next 24h</th><th class="num">Next 48h</th>
-          <th style="text-align:right">Next available (ET)</th></tr></thead>
-        <tbody>${evRows || '<tr><td colspan="6" style="color:var(--muted)">No rows.</td></tr>'}</tbody>
-      </table></div>
-    </div>`;
-  document.getElementById('run-meta').innerHTML = `Latest run<br><strong>${etDateTime(capturedAt)} ET</strong>`;
-  drawSeries(histFor(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===segment, 'avg_days_to_avail'),
-             stamps, 'Avg days to next slot');
-}
-
 // ── LEVEL 3 — one specialist ──────────────────────────────────────────────────
 async function renderRep(name){
   const rows = repLatest.filter(r=>r.name===name)
     .sort((a,b)=>String(a.event_type).localeCompare(String(b.event_type)));
   if(!rows.length){ location.hash = '#/'; return; }
-  const segment = rows[0].rep_segment || 'Unassigned';
-  setHead(name, `${rows.length} managed calendars · ${segment}`);
+  setHead(name, `${rows.length} managed calendar${rows.length===1?'':'s'}`);
 
   const best = repBest(name), bd = daysUntil(best, capturedAt);
   const with24 = rows.filter(r=>(num(r.avail_24h)||0)>0).length;
@@ -737,8 +606,7 @@ async function renderRep(name){
   }).join('');
 
   document.getElementById('content').innerHTML = `
-    <div class="crumbs"><a href="#/">← All segments</a><span class="sep">/</span>
-      <a href="#/segment/${encodeURIComponent(segment)}">${esc(segment)}</a><span class="sep">/</span><span>${esc(name)}</span></div>
+    <div class="crumbs"><a href="#/">← Overview</a><span class="sep">/</span><span>${esc(name)}</span></div>
     <div class="kpis">
       <div class="kpi"><div class="label">Earliest slot</div><div class="value" style="font-size:1.35rem">${relNext(best)}</div><div class="sub">${bd ?? '—'} days out</div></div>
       <div class="kpi"><div class="label">Calendars open ≤24h</div><div class="value">${with24}<span style="font-size:1rem;color:var(--dim);font-weight:600">/${rows.length}</span></div><div class="sub">have a slot in the next 24h</div></div>

@@ -12,10 +12,9 @@ snapshot into `capacity.ob_calendar_rep_daily` and `capacity.ob_calendar_segment
 
 | Route | View | Shows |
 |---|---|---|
-| `#/` | Overview | KPI tiles · 7 round-robin unit-tier cards · specialist segment cards · trend chart · all-segments table |
+| `#/` | Overview | KPI tiles · 7 round-robin unit-tier cards · flat specialist table · trend chart · unit-tier table |
 | `#/tier/{unit_tier}` | Round-robin detail | That calendar's numbers and its last 28 runs |
-| `#/segment/{rep_segment}` | **Manager view** | Every specialist in the segment, worst availability first, plus an event-type breakdown |
-| `#/rep/{name}` | Specialist detail | That person's 12 calendars, each with next slot / 24h / 48h / status |
+| `#/rep/{name}` | Specialist detail | That person's calendars, each with next slot / 24h / 48h / status |
 
 Routing is hash-based, so any drill-down state is a shareable link and the back button works.
 Cards and table rows are clickable; a `›` chevron marks anything that drills.
@@ -24,16 +23,12 @@ The overview intentionally mirrors the sales tracker — four KPI tiles, then st
 with a next-slot line, three metrics and a 14-day sparkline, then a single-series trend chart with
 a metric toggle, then a full table.
 
-## Why specialist slots aren't summed
+## No market segments
 
-A specialist's twelve calendars all draw on **one underlying availability**. Adding their slot
-counts together would overstate real capacity several times over. So:
-
-- **Round-robin tiers** are one calendar each — slot counts are shown directly and do add up.
-- **Specialist segments** report coverage and timing instead: specialists free today, event types
-  with an open slot, average days out.
-
-An on-page note states this so nobody reads the two card types as the same unit.
+Mid-Market / SMB+Emerging / Implementation belong to the **previous** onboarding segmentation and
+are deliberately absent — from the dashboard, from the aggregate grain, and from the tracker's
+roster. The only segmentation here is the **unit tier** on the round-robin kickoffs. Specialists
+are listed individually and drill straight to the person.
 
 ## What it shows
 
@@ -41,9 +36,9 @@ An on-page note states this so nobody reads the two card types as the same unit.
 |---|---|
 | KPI tiles | unit tiers available today, soonest slot anywhere, specialists available today, segments over the SLA threshold |
 | Round-robin cards | per unit band: next slot, open slots in 24h / 48h, days out, 14-day sparkline |
-| Specialist cards | per rep segment: specialists free today, event types open, avg days out, 14-day sparkline |
+| Specialist table | every specialist, worst availability first: days to slot, calendars open in 24h / 48h, earliest slot |
 | Trend chart | one metric across the round-robins, per run, last 14 days |
-| Tables | every segment / specialist / event type at the latest run |
+| Tables | every unit tier and every specialist at the latest run |
 
 Health / SLA threshold = next slot within **1 day**, matching the sales tracker and the RevOps
 threshold alert. "Days to slot" is computed in the browser from `next_available_at` against
