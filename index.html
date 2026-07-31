@@ -198,7 +198,13 @@ async function sqlQuery(sql, params = []) {
 const CALENDAR_SET = 'ob_2026_07';
 const THRESHOLD    = 1;          // days — matches the RevOps threshold alert
 const REFRESH_MS   = 60_000;
-const EVENT_TYPES_PER_REP = 12;  // the managed-event roster size, for coverage ratios
+// Derived from the data, not hardcoded — the tracker's Config node decides how many
+// event types each specialist is measured on, and that list is expected to change.
+const eventTypesPerRep = () => {
+  const counts = {};
+  repLatest.filter(r => r.type === 'SPECIALIST').forEach(r => { counts[r.name] = (counts[r.name] || 0) + 1; });
+  return Math.max(1, ...Object.values(counts), 1);
+};
 const num = v => (v === null || v === undefined || v === '') ? null : Number(v);
 
 // ── time helpers (ET) ─────────────────────────────────────────────────────────
@@ -529,12 +535,12 @@ function renderOverview(){
     <div class="section-title">Specialist coverage <span class="count">· ${segs.length} segments · click a segment to see each specialist</span></div>
     <div class="cards">${segCards || '<div class="state-msg">No specialist rows in the latest run.</div>'}</div>
 
-    <div class="note">
+    ${eventTypesPerRep() > 1 ? `<div class="note">
       Round-robin slot counts are per calendar, so they add up. Specialist counts are
-      deliberately not summed across the ${EVENT_TYPES_PER_REP} managed event types — a specialist's
+      deliberately not summed across the ${eventTypesPerRep()} managed event types — a specialist's
       calendars all draw on one underlying availability, so a sum would overstate real capacity.
       Specialist cards therefore report coverage and timing instead of slot totals.
-    </div>
+    </div>` : ''}
 
     <div class="panel">
       <div class="panel-head">
