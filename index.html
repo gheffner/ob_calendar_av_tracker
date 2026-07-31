@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Onboarding Calendar Availability</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       hsl(210 20% 98%);
+    --card:     hsl(0 0% 100%);
+    --border:   hsl(220 13% 91%);
+    --primary:  hsl(157 100% 35%);   /* DoorLoop green — brand chrome only */
+    --text:     hsl(234 33% 14%);
+    --muted:    hsl(215 16% 47%);
+    --dim:      hsl(215 16% 62%);
+    /* data mark hue (validated single-hue) */
+    --data:     #2a78d6;
+    --data-soft:rgba(42,120,214,0.12);
+    /* status palette (validated; always paired with icon+label) */
+    --good:     #0ca30c;
+    --warning:  #fab219;
+    --critical: #d03b3b;
+    --good-bg:  rgba(12,163,12,0.10);
+    --warn-bg:  rgba(250,178,25,0.14);
+    --crit-bg:  rgba(208,59,59,0.10);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,h4 { font-family:'Plus Jakarta Sans',sans-serif; }
+
+  /* ── Nav ── */
+  nav {
+    position:sticky; top:0; z-index:50;
+    background:rgba(255,255,255,0.95); backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--border);
+    padding:0 28px; height:60px; display:flex; align-items:center; justify-content:space-between;
+  }
+  .brand { display:flex; align-items:center; gap:9px; font-family:'Plus Jakarta Sans',sans-serif; font-size:1.05rem; font-weight:700; }
+  .brand-dot { width:10px; height:10px; border-radius:50%; background:var(--primary); flex-shrink:0; }
+  .status-pill {
+    display:flex; align-items:center; gap:7px; background:var(--bg);
+    border:1px solid var(--border); border-radius:20px; padding:6px 13px;
+    font-size:.78rem; color:var(--muted); white-space:nowrap;
+  }
+  .status-dot { width:8px; height:8px; border-radius:50%; background:var(--good); animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.35;} }
+
+  .wrap { max-width:1180px; margin:0 auto; padding:26px 28px 60px; }
+
+  /* ── Header ── */
+  .page-head { display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:22px; }
+  .page-head h1 { font-size:1.7rem; font-weight:800; }
+  .page-head p { color:var(--muted); font-size:.88rem; margin-top:3px; }
+  .run-meta { text-align:right; font-size:.8rem; color:var(--muted); }
+  .run-meta strong { color:var(--text); font-weight:600; }
+
+  /* ── Breadcrumb (drill-down) ── */
+  .crumbs { display:flex; align-items:center; gap:7px; font-size:.82rem; color:var(--muted); margin-bottom:14px; flex-wrap:wrap; }
+  .crumbs a { color:var(--data); text-decoration:none; font-weight:600; }
+  .crumbs a:hover { text-decoration:underline; }
+  .crumbs .sep { color:var(--dim); }
+
+  /* ── KPI tiles ── */
+  .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:26px; }
+  .kpi { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px 18px; }
+  .kpi .label { font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; }
+  .kpi .value { font-size:2rem; font-weight:800; font-family:'Plus Jakarta Sans',sans-serif; margin-top:6px; line-height:1; }
+  .kpi .sub { font-size:.78rem; color:var(--dim); margin-top:6px; }
+  .kpi.alert .value { color:var(--critical); }
+  .kpi.ok .value { color:var(--good); }
+
+  /* ── Section ── */
+  .section-title { font-size:1.05rem; font-weight:700; margin:6px 0 14px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .section-title .count { font-size:.78rem; font-weight:500; color:var(--muted); }
+
+  /* ── Segment cards ── */
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; margin-bottom:30px; }
+  .card {
+    background:var(--card); border:1px solid var(--border); border-radius:14px;
+    padding:16px 17px; position:relative; overflow:hidden;
+    border-left:4px solid var(--border); transition:box-shadow .15s, transform .15s;
+  }
+  .card:hover { box-shadow:0 4px 18px rgba(15,23,42,0.07); }
+  .card.good     { border-left-color:var(--good); }
+  .card.warning  { border-left-color:var(--warning); }
+  .card.critical { border-left-color:var(--critical); }
+  .card.clickable { cursor:pointer; }
+  .card.clickable:hover { transform:translateY(-1px); }
+  .card.clickable::after {
+    content:'›'; position:absolute; right:14px; bottom:10px;
+    font-size:1.4rem; line-height:1; color:var(--dim);
+  }
+  .card-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+  .tier { font-family:'Plus Jakarta Sans',sans-serif; font-weight:700; font-size:1.02rem; }
+  .tier .tier-sub { display:block; font-family:'Inter',sans-serif; font-weight:400; font-size:.72rem; color:var(--dim); margin-top:2px; }
+  .badge { display:inline-flex; align-items:center; gap:5px; font-size:.72rem; font-weight:600; padding:4px 9px; border-radius:20px; white-space:nowrap; }
+  .badge.good     { background:var(--good-bg); color:#0a7d0a; }
+  .badge.warning  { background:var(--warn-bg); color:#9a6a00; }
+  .badge.critical { background:var(--crit-bg); color:var(--critical); }
+  .next-line { margin-top:13px; font-size:.82rem; color:var(--muted); }
+  .next-line strong { color:var(--text); font-weight:600; }
+  .metrics { display:flex; gap:20px; margin-top:13px; }
+  .metric .m-val { font-size:1.25rem; font-weight:700; font-family:'Plus Jakarta Sans',sans-serif; }
+  .metric .m-lab { font-size:.68rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-top:1px; }
+  .spark { margin-top:12px; height:34px; }
+  .spark svg { width:100%; height:34px; display:block; }
+  .spark-lab { font-size:.65rem; color:var(--dim); margin-top:2px; }
+
+  /* ── Chart panel ── */
+  .panel { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:20px 22px; margin-bottom:26px; }
+  .panel-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:6px; }
+  .panel-head h3 { font-size:1rem; font-weight:700; }
+  .panel-head p { font-size:.8rem; color:var(--muted); margin-top:2px; }
+  .toggle { display:flex; gap:4px; background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:3px; }
+  .toggle button {
+    font-family:'Inter',sans-serif; font-size:.78rem; font-weight:600; color:var(--muted);
+    border:none; background:transparent; padding:6px 12px; border-radius:7px; cursor:pointer; transition:all .12s;
+  }
+  .toggle button.active { background:var(--card); color:var(--text); box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .chartbox { position:relative; height:300px; margin-top:12px; }
+
+  /* ── Table ── */
+  table { width:100%; border-collapse:collapse; font-size:.85rem; }
+  th, td { text-align:left; padding:11px 12px; border-bottom:1px solid var(--border); }
+  th { font-size:.7rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:600; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  tbody tr:hover { background:var(--bg); }
+  tbody tr.clickable { cursor:pointer; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; vertical-align:middle; }
+  .dot.good{background:var(--good);} .dot.warning{background:var(--warning);} .dot.critical{background:var(--critical);}
+  .rowlink { color:var(--data); font-weight:600; }
+
+  .note {
+    background:var(--bg); border:1px solid var(--border); border-left:3px solid var(--data);
+    border-radius:8px; padding:11px 14px; font-size:.8rem; color:var(--muted); margin-bottom:22px;
+  }
+  .state-msg { text-align:center; padding:60px 20px; color:var(--muted); font-size:.95rem; line-height:1.6; }
+  footer { text-align:center; color:var(--dim); font-size:.76rem; margin-top:30px; }
+  footer a { color:var(--muted); }
+
+  @media (max-width:720px){
+    .kpis { grid-template-columns:repeat(2,1fr); }
+    .page-head { align-items:flex-start; }
+    .run-meta { text-align:left; }
+  }
+</style>
+</head>
+<body data-palette="#2a78d6">
+
+<nav>
+  <div class="brand"><span class="brand-dot"></span>Onboarding Calendar Availability</div>
+  <div class="status-pill"><span class="status-dot"></span><span id="live-label">Live</span></div>
+</nav>
+
+<div class="wrap">
+  <div class="page-head">
+    <div>
+      <h1 id="page-title">Onboarding Availability</h1>
+      <p id="page-sub">Next-slot availability across the onboarding calendars, by segment.</p>
+    </div>
+    <div class="run-meta" id="run-meta">Loading…</div>
+  </div>
+
+  <div id="content">
+    <div class="state-msg">Loading availability…</div>
+  </div>
+
+  <footer>
+    Source: <code>capacity.ob_calendar_segment_daily</code> · <code>capacity.ob_calendar_rep_daily</code> ·
+    refreshed every 60s · SLA threshold: next slot within <span id="thr">1</span> day
+  </footer>
+</div>
+
+<script src="config.js"></script>
+<script>
+// ── SQL proxy helper (same-origin /api/sql in prod; local proxy in dev) ───────
+async function sqlQuery(sql, params = []) {
+  if (!window.SQL_CONFIG) throw new Error('Missing config.js');
+  const { url, headers } = window.SQL_CONFIG;
+  const res = await fetch(url, {
+    method:'POST', headers:{ ...headers, 'Content-Type':'application/json' },
+    body: JSON.stringify({ sql, params })
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error || 'SQL error');
+  return json.rows || [];
+}
+
+const CALENDAR_SET = 'ob_2026_07';
+const THRESHOLD    = 1;          // days — matches the RevOps threshold alert
+const REFRESH_MS   = 60_000;
+const EVENT_TYPES_PER_REP = 12;  // the managed-event roster size, for coverage ratios
+const num = v => (v === null || v === undefined || v === '') ? null : Number(v);
+
+// ── time helpers (ET) ─────────────────────────────────────────────────────────
+const etFmt = new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'});
+function etDayNum(d){
+  const [y,m,dd] = etFmt.format(new Date(d)).split('-').map(Number);
+  return Date.UTC(y, m-1, dd) / 86400000;
+}
+// Whole ET calendar days from the run to the slot. 0 = today, 1 = tomorrow.
+// Derived here rather than read from the stored integer so "today" always means
+// today in Eastern time, not in UTC.
+function daysUntil(iso, refIso){
+  if(!iso) return null;
+  return etDayNum(iso) - etDayNum(refIso || Date.now());
+}
+function etTime(iso){ return iso ? new Date(iso).toLocaleString('en-US',{timeZone:'America/New_York',hour:'numeric',minute:'2-digit',hour12:true}) : '—'; }
+function etDateTime(iso){ return iso ? new Date(iso).toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true}) : '—'; }
+function etDay(d){ return new Date(d).toLocaleDateString('en-US',{timeZone:'America/New_York'}); }
+function relNext(iso){
+  if(!iso) return 'No availability';
+  const now = new Date(), t = new Date(iso);
+  const mins = Math.round((t-now)/60000);
+  if(mins < 0)  return 'Now';
+  if(mins < 60) return `in ${mins} min`;
+  if(etDay(t) === etDay(now)) return `Today · ${etTime(iso)}`;
+  const tmr = new Date(now); tmr.setDate(tmr.getDate()+1);
+  if(etDay(t) === etDay(tmr)) return `Tomorrow · ${etTime(iso)}`;
+  return etDateTime(iso);
+}
+
+// Health from days-until-next-slot vs threshold. Status is never color-alone:
+// every use pairs the icon with the label.
+function health(days){
+  if(days === null) return {k:'critical', icon:'⛔', label:'No slots'};
+  if(days <= 0)      return {k:'good',     icon:'✅', label:'Today'};
+  if(days <= THRESHOLD) return {k:'warning', icon:'⚠️', label:'Tomorrow'};
+  return {k:'critical', icon:'⛔', label:`${days}d out`};
+}
+
+// Unit tiers sort by prospect size, not alphabetically; Spanish sorts last.
+function tierRank(seg){
+  if(!seg) return 9e9;
+  const m = String(seg).match(/\d+/);
+  return m ? parseInt(m[0],10) : 9e9;
+}
+const SEG_ORDER = ['Implementation','Mid-Market','SMB+Emerging'];
+function segRank(s){
+  const i = SEG_ORDER.indexOf(s);
+  return i === -1 ? (s === 'Unassigned' ? 99 : 50) : i;
+}
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// ── sparkline (single-hue, inline SVG) ────────────────────────────────────────
+function sparkline(values, label){
+  const v = values.filter(x=>x!==null);
+  if(v.length < 2) return `<div class="spark" style="color:var(--dim);font-size:.72rem;display:flex;align-items:center">—</div>`;
+  const w=220, h=34, pad=3, min=Math.min(...v), max=Math.max(...v), span=(max-min)||1;
+  const pts = values.map((val,i)=>{
+    const x = pad + (i/(values.length-1))*(w-2*pad);
+    const y = val===null ? null : h-pad-((val-min)/span)*(h-2*pad);
+    return y===null?null:`${x.toFixed(1)},${y.toFixed(1)}`;
+  }).filter(Boolean);
+  const last = pts[pts.length-1].split(',');
+  return `<div class="spark"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polyline points="${pts.join(' ')}" fill="none" stroke="var(--data)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${last[0]}" cy="${last[1]}" r="2.8" fill="var(--data)"/>
+  </svg></div>${label?`<div class="spark-lab">${esc(label)}</div>`:''}`;
+}
+
+// ── state ─────────────────────────────────────────────────────────────────────
+let segLatest = [];   // ob_calendar_segment_daily, most recent run
+let segHistory = [];   // ob_calendar_segment_daily, last 14 days
+let repLatest = [];   // ob_calendar_rep_daily, most recent run
+let repHistCache = {};   // rep name -> 14d rows (fetched on drill-down)
+let chart = null;
+let trendMetric = 'avail_24h';
+let capturedAt = null;
+
+async function fetchData(){
+  try {
+    const [segRows, segHist, repRows] = await Promise.all([
+      sqlQuery(
+        `SELECT captured_at, run_period, type, unit_tier, event_type, rep_segment,
+                entity_count, avail_24h, avail_48h, next_available_at,
+                avg_days_to_avail, slots_48h_after_first
+           FROM capacity.ob_calendar_segment_daily
+          WHERE calendar_set = $1
+            AND captured_at = (SELECT max(captured_at) FROM capacity.ob_calendar_segment_daily WHERE calendar_set = $1)`,
+        [CALENDAR_SET]),
+      sqlQuery(
+        `SELECT captured_at, type, unit_tier, event_type, rep_segment,
+                avail_24h, avail_48h, next_available_at, avg_days_to_avail
+           FROM capacity.ob_calendar_segment_daily
+          WHERE calendar_set = $1 AND captured_at >= now() - interval '14 days'
+          ORDER BY captured_at`,
+        [CALENDAR_SET]),
+      sqlQuery(
+        `SELECT captured_at, type, name, event_type, unit_tier, rep_segment,
+                calendly_username, rep_email, scheduling_url,
+                avail_24h, avail_48h, next_available_at, days_until_available,
+                slots_48h_after_first, slot_count
+           FROM capacity.ob_calendar_rep_daily
+          WHERE calendar_set = $1
+            AND captured_at = (SELECT max(captured_at) FROM capacity.ob_calendar_rep_daily WHERE calendar_set = $1)`,
+        [CALENDAR_SET])
+    ]);
+    segLatest = segRows; segHistory = segHist; repLatest = repRows;
+    capturedAt = segRows[0]?.captured_at || repRows[0]?.captured_at || null;
+  } catch(err){
+    document.getElementById('content').innerHTML =
+      `<div class="state-msg">⚠️ Error loading data: ${esc(err.message)}</div>`;
+    return;
+  }
+  route();
+}
+
+// ── derived views ─────────────────────────────────────────────────────────────
+// Round-robin tiers: one calendar each, so slot counts are meaningful as-is.
+function rrTiers(){
+  return segLatest.filter(r=>r.type==='RR')
+    .sort((a,b)=>tierRank(a.unit_tier)-tierRank(b.unit_tier));
+}
+// Specialist rep segments: rolled up from the event_type x rep_segment grain.
+// Slot counts are deliberately NOT summed across event types — a rep's 12
+// calendars draw on one underlying availability, so summing would overcount.
+function repSegments(){
+  const by = {};
+  for(const r of segLatest.filter(r=>r.type==='SPECIALIST')){
+    const seg = r.rep_segment || 'Unassigned';
+    const g = by[seg] ??= { segment:seg, eventTypes:0, covered:0, bestIso:null, daysSum:0, daysN:0 };
+    g.eventTypes += 1;
+    const iso = r.next_available_at;
+    if(iso){
+      g.covered += 1;
+      if(!g.bestIso || new Date(iso) < new Date(g.bestIso)) g.bestIso = iso;
+    }
+    const d = num(r.avg_days_to_avail);
+    if(d !== null){ g.daysSum += d; g.daysN += 1; }
+  }
+  // reps come from the detail grain
+  for(const seg of Object.keys(by)){
+    const reps = new Set(repLatest.filter(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===seg).map(r=>r.name));
+    by[seg].reps = reps.size;
+    by[seg].repsToday = [...reps].filter(n=>{
+      const best = repBest(n);
+      return daysUntil(best, capturedAt) === 0;
+    }).length;
+  }
+  return Object.values(by).sort((a,b)=>segRank(a.segment)-segRank(b.segment));
+}
+// A rep's earliest slot across all of their event types.
+function repBest(name){
+  const isos = repLatest.filter(r=>r.name===name).map(r=>r.next_available_at).filter(Boolean).sort();
+  return isos[0] || null;
+}
+function repsIn(segment){
+  const names = [...new Set(repLatest
+    .filter(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===segment)
+    .map(r=>r.name))];
+  return names.map(name=>{
+    const rows = repLatest.filter(r=>r.name===name);
+    const best = repBest(name);
+    return {
+      name,
+      username: rows[0]?.calendly_username || '',
+      email: rows[0]?.rep_email || '',
+      eventTypes: rows.length,
+      with24: rows.filter(r=>(num(r.avail_24h)||0) > 0).length,
+      with48: rows.filter(r=>(num(r.avail_48h)||0) > 0).length,
+      best,
+      days: daysUntil(best, capturedAt),
+    };
+  }).sort((a,b)=>{
+    const da = a.days === null ? 9e9 : a.days, db = b.days === null ? 9e9 : b.days;
+    return db - da || a.name.localeCompare(b.name);   // worst first — managers act on these
+  });
+}
+
+// history helpers keyed per entity, chronological
+function histFor(pred, metric){
+  const runs = {};
+  segHistory.filter(pred).forEach(r=>{ (runs[r.captured_at] ??= []).push(r); });
+  return Object.keys(runs).sort().map(s=>{
+    const vals = runs[s].map(r=>num(r[metric])).filter(v=>v!==null);
+    if(!vals.length) return null;
+    return metric === 'avg_days_to_avail'
+      ? +(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(2)
+      : vals.reduce((a,b)=>a+b,0);
+  });
+}
+
+// ── router ────────────────────────────────────────────────────────────────────
+function route(){
+  const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
+  const [view, ...rest] = h.split('/');
+  const key = rest.join('/');
+  if(view === 'tier'    && key) return renderTier(key);
+  if(view === 'segment' && key) return renderSegment(key);
+  if(view === 'rep'     && key) return renderRep(key);
+  renderOverview();
+}
+window.addEventListener('hashchange', route);
+
+function setHead(title, sub){
+  document.getElementById('page-title').textContent = title;
+  document.getElementById('page-sub').textContent = sub;
+}
+function emptyState(){
+  document.getElementById('content').innerHTML = `<div class="state-msg">
+    No availability rows yet for <code>calendar_set = '${CALENDAR_SET}'</code>.<br>
+    Data appears after the first run of <code>ob_calendly_next_availability_v2</code>.</div>`;
+  document.getElementById('run-meta').textContent = 'No runs yet';
+}
+
+// ── LEVEL 1 — overview ────────────────────────────────────────────────────────
+function renderOverview(){
+  if(!segLatest.length && !repLatest.length) return emptyState();
+  setHead('Onboarding Availability', 'Next-slot availability across the onboarding calendars, by segment.');
+
+  const tiers = rrTiers();
+  const segs  = repSegments();
+  const allRepNames = [...new Set(repLatest.filter(r=>r.type==='SPECIALIST').map(r=>r.name))];
+
+  const tiersToday = tiers.filter(t=>daysUntil(t.next_available_at, capturedAt)===0).length;
+  const repsToday  = allRepNames.filter(n=>daysUntil(repBest(n), capturedAt)===0).length;
+  const soonest = [...segLatest.map(r=>r.next_available_at), ...repLatest.map(r=>r.next_available_at)]
+    .filter(Boolean).sort()[0] || null;
+  const breach = [
+    ...tiers.map(t=>daysUntil(t.next_available_at, capturedAt)),
+    ...segs.map(s=>daysUntil(s.bestIso, capturedAt)),
+  ].filter(d=>d===null || d>THRESHOLD).length;
+
+  const kpis = `
+    <div class="kpis">
+      <div class="kpi ${tiers.length && tiersToday===tiers.length?'ok':''}">
+        <div class="label">Unit tiers available today</div>
+        <div class="value">${tiersToday}<span style="font-size:1rem;color:var(--dim);font-weight:600">/${tiers.length}</span></div>
+        <div class="sub">sales-handoff kickoff calendars</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Soonest slot</div>
+        <div class="value" style="font-size:1.35rem">${relNext(soonest)}</div>
+        <div class="sub">earliest across every calendar</div>
+      </div>
+      <div class="kpi ${allRepNames.length && repsToday===allRepNames.length?'ok':''}">
+        <div class="label">Specialists available today</div>
+        <div class="value">${repsToday}<span style="font-size:1rem;color:var(--dim);font-weight:600">/${allRepNames.length}</span></div>
+        <div class="sub">at least one same-day slot</div>
+      </div>
+      <div class="kpi ${breach>0?'alert':'ok'}">
+        <div class="label">Over SLA</div>
+        <div class="value">${breach}</div>
+        <div class="sub">segments past ${THRESHOLD}-day threshold</div>
+      </div>
+    </div>`;
+
+  // ── round-robin tier cards ──
+  const tierCards = tiers.map(t=>{
+    const d = daysUntil(t.next_available_at, capturedAt), hs = health(d);
+    const runs = histFor(r=>r.type==='RR' && r.unit_tier===t.unit_tier, 'avail_24h');
+    return `
+      <div class="card clickable ${hs.k}" onclick="location.hash='#/tier/${encodeURIComponent(t.unit_tier)}'">
+        <div class="card-top">
+          <div class="tier">${esc(t.unit_tier)}<span class="tier-sub">Round-robin kickoff</span></div>
+          <span class="badge ${hs.k}">${hs.icon} ${hs.label}</span>
+        </div>
+        <div class="next-line">Next slot: <strong>${relNext(t.next_available_at)}</strong></div>
+        <div class="metrics">
+          <div class="metric"><div class="m-val">${num(t.avail_24h) ?? '—'}</div><div class="m-lab">Next 24h</div></div>
+          <div class="metric"><div class="m-val">${num(t.avail_48h) ?? '—'}</div><div class="m-lab">Next 48h</div></div>
+          <div class="metric"><div class="m-val">${d ?? '—'}</div><div class="m-lab">Days out</div></div>
+        </div>
+        ${sparkline(runs, 'open slots next 24h · 14d')}
+      </div>`;
+  }).join('');
+
+  // ── specialist segment cards ──
+  const segCards = segs.map(s=>{
+    const d = daysUntil(s.bestIso, capturedAt), hs = health(d);
+    const runs = histFor(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===s.segment, 'avg_days_to_avail');
+    const avgDays = s.daysN ? (s.daysSum/s.daysN).toFixed(1) : '—';
+    return `
+      <div class="card clickable ${hs.k}" onclick="location.hash='#/segment/${encodeURIComponent(s.segment)}'">
+        <div class="card-top">
+          <div class="tier">${esc(s.segment)}<span class="tier-sub">${s.reps} specialist${s.reps===1?'':'s'}</span></div>
+          <span class="badge ${hs.k}">${hs.icon} ${hs.label}</span>
+        </div>
+        <div class="next-line">Earliest slot: <strong>${relNext(s.bestIso)}</strong></div>
+        <div class="metrics">
+          <div class="metric"><div class="m-val">${s.repsToday}<span style="font-size:.85rem;color:var(--dim)">/${s.reps}</span></div><div class="m-lab">Free today</div></div>
+          <div class="metric"><div class="m-val">${s.covered}<span style="font-size:.85rem;color:var(--dim)">/${s.eventTypes}</span></div><div class="m-lab">Event types open</div></div>
+          <div class="metric"><div class="m-val">${avgDays}</div><div class="m-lab">Avg days out</div></div>
+        </div>
+        ${sparkline(runs, 'avg days to slot · 14d')}
+      </div>`;
+  }).join('');
+
+  // ── all-segments table ──
+  const tableRows = [
+    ...tiers.map(t=>{
+      const d = daysUntil(t.next_available_at, capturedAt), hs = health(d);
+      return `<tr class="clickable" onclick="location.hash='#/tier/${encodeURIComponent(t.unit_tier)}'">
+        <td><span class="dot ${hs.k}"></span>Round-robin</td>
+        <td class="rowlink">${esc(t.unit_tier)}</td>
+        <td class="num">${d ?? '—'}</td>
+        <td class="num">${num(t.avail_24h) ?? '—'}</td>
+        <td class="num">${num(t.avail_48h) ?? '—'}</td>
+        <td style="text-align:right;color:var(--muted)">${etDateTime(t.next_available_at)}</td></tr>`;
+    }),
+    ...segs.map(s=>{
+      const d = daysUntil(s.bestIso, capturedAt), hs = health(d);
+      return `<tr class="clickable" onclick="location.hash='#/segment/${encodeURIComponent(s.segment)}'">
+        <td><span class="dot ${hs.k}"></span>Specialist</td>
+        <td class="rowlink">${esc(s.segment)}</td>
+        <td class="num">${d ?? '—'}</td>
+        <td class="num">—</td>
+        <td class="num">—</td>
+        <td style="text-align:right;color:var(--muted)">${etDateTime(s.bestIso)}</td></tr>`;
+    })
+  ].join('');
+
+  document.getElementById('content').innerHTML = `
+    ${kpis}
+
+    <div class="section-title">Sales handoff — round-robin <span class="count">· ${tiers.length} calendars · sorted by unit count · click to drill in</span></div>
+    <div class="cards">${tierCards || '<div class="state-msg">No round-robin rows in the latest run.</div>'}</div>
+
+    <div class="section-title">Specialist coverage <span class="count">· ${segs.length} segments · click a segment to see each specialist</span></div>
+    <div class="cards">${segCards || '<div class="state-msg">No specialist rows in the latest run.</div>'}</div>
+
+    <div class="note">
+      Round-robin slot counts are per calendar, so they add up. Specialist counts are
+      deliberately not summed across the ${EVENT_TYPES_PER_REP} managed event types — a specialist's
+      calendars all draw on one underlying availability, so a sum would overstate real capacity.
+      Specialist cards therefore report coverage and timing instead of slot totals.
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Availability trend</h3>
+          <p>Round-robin totals per run (last 14 days)</p>
+        </div>
+        <div class="toggle" id="metric-toggle">
+          <button data-m="avail_24h" class="active">Slots next 24h</button>
+          <button data-m="avail_48h">Slots next 48h</button>
+          <button data-m="avg_days_to_avail">Avg days to slot</button>
+        </div>
+      </div>
+      <div class="chartbox"><canvas id="chart"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div><h3>All segments — latest run</h3></div></div>
+      <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th>Kind</th><th>Segment</th><th class="num">Days to slot</th>
+          <th class="num">Next 24h</th><th class="num">Next 48h</th>
+          <th style="text-align:right">Next available (ET)</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+      </div>
+    </div>`;
+
+  document.getElementById('run-meta').innerHTML = `Latest run<br><strong>${etDateTime(capturedAt)} ET</strong>`;
+  document.getElementById('thr').textContent = THRESHOLD;
+  document.querySelectorAll('#metric-toggle button').forEach(b=>{
+    b.onclick = ()=>{
+      document.querySelectorAll('#metric-toggle button').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active'); trendMetric = b.dataset.m;
+      drawSeries(histFor(r=>r.type==='RR', trendMetric), stampsFor(r=>r.type==='RR'), metricTitle(trendMetric));
+    };
+  });
+  drawSeries(histFor(r=>r.type==='RR', trendMetric), stampsFor(r=>r.type==='RR'), metricTitle(trendMetric));
+}
+
+// ── LEVEL 2a — one round-robin tier ───────────────────────────────────────────
+function renderTier(tier){
+  const row = rrTiers().find(t=>t.unit_tier === tier);
+  if(!row){ location.hash = '#/'; return; }
+  setHead(tier, 'Round-robin kickoff calendar for this unit band.');
+  const d = daysUntil(row.next_available_at, capturedAt), hs = health(d);
+  const cal = repLatest.find(r=>r.type==='RR' && r.unit_tier===tier);
+
+  const runs = segHistory.filter(r=>r.type==='RR' && r.unit_tier===tier).sort((a,b)=>a.captured_at.localeCompare(b.captured_at));
+  const histRows = [...runs].reverse().slice(0,28).map(r=>`<tr>
+      <td>${etDateTime(r.captured_at)}</td>
+      <td class="num">${num(r.avail_24h) ?? '—'}</td>
+      <td class="num">${num(r.avail_48h) ?? '—'}</td>
+      <td class="num">${num(r.avg_days_to_avail) ?? '—'}</td>
+      <td style="text-align:right;color:var(--muted)">${etDateTime(r.next_available_at)}</td></tr>`).join('');
+
+  document.getElementById('content').innerHTML = `
+    <div class="crumbs"><a href="#/">← All segments</a><span class="sep">/</span><span>${esc(tier)}</span></div>
+    <div class="kpis">
+      <div class="kpi"><div class="label">Status</div><div class="value" style="font-size:1.35rem">${hs.icon} ${hs.label}</div><div class="sub">vs ${THRESHOLD}-day SLA</div></div>
+      <div class="kpi"><div class="label">Next slot</div><div class="value" style="font-size:1.35rem">${relNext(row.next_available_at)}</div><div class="sub">${etDateTime(row.next_available_at)} ET</div></div>
+      <div class="kpi"><div class="label">Slots next 24h</div><div class="value">${num(row.avail_24h) ?? '—'}</div><div class="sub">${num(row.avail_48h) ?? '—'} within 48h</div></div>
+      <div class="kpi"><div class="label">Slots after first</div><div class="value">${num(row.slots_48h_after_first) ?? '—'}</div><div class="sub">within 48h of the first slot</div></div>
+    </div>
+
+    <div class="note">
+      This is a pooled round-robin — bookings distribute across whoever is in the Calendly
+      pool, so there is no single owner to drill into. For individual specialists use
+      <a href="#/" style="color:var(--data)">Specialist coverage</a>.
+      ${cal ? `Calendar: <code>${esc(cal.scheduling_url || cal.event_type || '')}</code>` : ''}
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div><h3>Open slots next 24h</h3><p>${esc(tier)} · last 14 days</p></div></div>
+      <div class="chartbox"><canvas id="chart"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div><h3>Run history</h3><p>Most recent 28 runs</p></div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>Run (ET)</th><th class="num">Next 24h</th><th class="num">Next 48h</th>
+          <th class="num">Avg days</th><th style="text-align:right">Next available (ET)</th></tr></thead>
+        <tbody>${histRows || '<tr><td colspan="5" style="color:var(--muted)">No history yet.</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+  document.getElementById('run-meta').innerHTML = `Latest run<br><strong>${etDateTime(capturedAt)} ET</strong>`;
+  drawSeries(runs.map(r=>num(r.avail_24h)), runs.map(r=>r.captured_at), 'Open slots · next 24h');
+}
+
+// ── LEVEL 2b — one specialist segment (the manager view) ──────────────────────
+function renderSegment(segment){
+  const reps = repsIn(segment);
+  if(!reps.length){ location.hash = '#/'; return; }
+  setHead(segment, `Each specialist in ${segment}, worst availability first.`);
+
+  const today = reps.filter(r=>r.days===0).length;
+  const noSlots = reps.filter(r=>r.days===null).length;
+  const best = reps.map(r=>r.best).filter(Boolean).sort()[0] || null;
+
+  const repRows = reps.map(r=>{
+    const hs = health(r.days);
+    return `<tr class="clickable" onclick="location.hash='#/rep/${encodeURIComponent(r.name)}'">
+      <td><span class="dot ${hs.k}"></span><span class="rowlink">${esc(r.name)}</span></td>
+      <td style="color:var(--muted)">${esc(r.username)}</td>
+      <td class="num">${r.days ?? '—'}</td>
+      <td class="num">${r.with24}<span style="color:var(--dim)">/${r.eventTypes}</span></td>
+      <td class="num">${r.with48}<span style="color:var(--dim)">/${r.eventTypes}</span></td>
+      <td style="text-align:right;color:var(--muted)">${etDateTime(r.best)}</td>
+      <td><span class="badge ${hs.k}">${hs.icon} ${hs.label}</span></td></tr>`;
+  }).join('');
+
+  // event-type breakdown inside this segment
+  const evRows = segLatest
+    .filter(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===segment)
+    .sort((a,b)=>String(a.event_type).localeCompare(String(b.event_type)))
+    .map(r=>{
+      const d = daysUntil(r.next_available_at, capturedAt), hs = health(d);
+      return `<tr>
+        <td><span class="dot ${hs.k}"></span>${esc(r.event_type)}</td>
+        <td class="num">${num(r.entity_count) ?? '—'}</td>
+        <td class="num">${d ?? '—'}</td>
+        <td class="num">${num(r.avail_24h) ?? '—'}</td>
+        <td class="num">${num(r.avail_48h) ?? '—'}</td>
+        <td style="text-align:right;color:var(--muted)">${etDateTime(r.next_available_at)}</td></tr>`;
+    }).join('');
+
+  const runs = segHistory.filter(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===segment);
+  const stamps = [...new Set(runs.map(r=>r.captured_at))].sort();
+
+  document.getElementById('content').innerHTML = `
+    <div class="crumbs"><a href="#/">← All segments</a><span class="sep">/</span><span>${esc(segment)}</span></div>
+    <div class="kpis">
+      <div class="kpi ${today===reps.length?'ok':''}"><div class="label">Free today</div>
+        <div class="value">${today}<span style="font-size:1rem;color:var(--dim);font-weight:600">/${reps.length}</span></div>
+        <div class="sub">specialists with a same-day slot</div></div>
+      <div class="kpi"><div class="label">Earliest slot</div><div class="value" style="font-size:1.35rem">${relNext(best)}</div><div class="sub">across the segment</div></div>
+      <div class="kpi ${noSlots>0?'alert':'ok'}"><div class="label">Fully booked</div><div class="value">${noSlots}</div><div class="sub">no slot in the 7-day horizon</div></div>
+      <div class="kpi"><div class="label">Specialists</div><div class="value">${reps.length}</div><div class="sub">${reps.reduce((s,r)=>s+r.eventTypes,0)} calendars tracked</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div><h3>Specialists</h3><p>Worst availability first — click a name for their calendars</p></div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>Specialist</th><th>Calendly</th><th class="num">Days to slot</th>
+          <th class="num">Open ≤24h</th><th class="num">Open ≤48h</th>
+          <th style="text-align:right">Earliest (ET)</th><th>Status</th></tr></thead>
+        <tbody>${repRows}</tbody>
+      </table></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div><h3>Avg days to slot</h3><p>${esc(segment)} · last 14 days</p></div></div>
+      <div class="chartbox"><canvas id="chart"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div><h3>By event type</h3><p>Latest run · ${esc(segment)}</p></div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>Event type</th><th class="num">Specialists</th><th class="num">Days to slot</th>
+          <th class="num">Next 24h</th><th class="num">Next 48h</th>
+          <th style="text-align:right">Next available (ET)</th></tr></thead>
+        <tbody>${evRows || '<tr><td colspan="6" style="color:var(--muted)">No rows.</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+  document.getElementById('run-meta').innerHTML = `Latest run<br><strong>${etDateTime(capturedAt)} ET</strong>`;
+  drawSeries(histFor(r=>r.type==='SPECIALIST' && (r.rep_segment||'Unassigned')===segment, 'avg_days_to_avail'),
+             stamps, 'Avg days to next slot');
+}
+
+// ── LEVEL 3 — one specialist ──────────────────────────────────────────────────
+async function renderRep(name){
+  const rows = repLatest.filter(r=>r.name===name)
+    .sort((a,b)=>String(a.event_type).localeCompare(String(b.event_type)));
+  if(!rows.length){ location.hash = '#/'; return; }
+  const segment = rows[0].rep_segment || 'Unassigned';
+  setHead(name, `${rows.length} managed calendars · ${segment}`);
+
+  const best = repBest(name), bd = daysUntil(best, capturedAt);
+  const with24 = rows.filter(r=>(num(r.avail_24h)||0)>0).length;
+  const booked = rows.filter(r=>!r.next_available_at).length;
+
+  const evRows = rows.map(r=>{
+    const d = daysUntil(r.next_available_at, capturedAt), hs = health(d);
+    return `<tr>
+      <td><span class="dot ${hs.k}"></span>${esc(r.event_type)}</td>
+      <td class="num">${d ?? '—'}</td>
+      <td class="num">${num(r.avail_24h) ?? '—'}</td>
+      <td class="num">${num(r.avail_48h) ?? '—'}</td>
+      <td class="num">${num(r.slot_count) ?? '—'}</td>
+      <td style="text-align:right;color:var(--muted)">${etDateTime(r.next_available_at)}</td>
+      <td><span class="badge ${hs.k}">${hs.icon} ${hs.label}</span></td></tr>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <div class="crumbs"><a href="#/">← All segments</a><span class="sep">/</span>
+      <a href="#/segment/${encodeURIComponent(segment)}">${esc(segment)}</a><span class="sep">/</span><span>${esc(name)}</span></div>
+    <div class="kpis">
+      <div class="kpi"><div class="label">Earliest slot</div><div class="value" style="font-size:1.35rem">${relNext(best)}</div><div class="sub">${bd ?? '—'} days out</div></div>
+      <div class="kpi"><div class="label">Calendars open ≤24h</div><div class="value">${with24}<span style="font-size:1rem;color:var(--dim);font-weight:600">/${rows.length}</span></div><div class="sub">have a slot in the next 24h</div></div>
+      <div class="kpi ${booked>0?'alert':'ok'}"><div class="label">Fully booked</div><div class="value">${booked}</div><div class="sub">no slot in the 7-day horizon</div></div>
+      <div class="kpi"><div class="label">Total slots</div><div class="value">${rows.reduce((s,r)=>s+(num(r.slot_count)||0),0)}</div><div class="sub">across the 7-day horizon</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div><h3>Calendars</h3><p>Latest run · ${esc(name)}</p></div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>Event type</th><th class="num">Days to slot</th><th class="num">Next 24h</th>
+          <th class="num">Next 48h</th><th class="num">Slots (7d)</th>
+          <th style="text-align:right">Next available (ET)</th><th>Status</th></tr></thead>
+        <tbody>${evRows}</tbody>
+      </table></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div><h3>Days to earliest slot</h3><p>${esc(name)} · last 14 days</p></div></div>
+      <div class="chartbox"><canvas id="chart"></canvas></div>
+    </div>`;
+  document.getElementById('run-meta').innerHTML = `Latest run<br><strong>${etDateTime(capturedAt)} ET</strong>`;
+
+  // rep history is fetched lazily — the detail grain is ~160 rows per run
+  let hist = repHistCache[name];
+  if(!hist){
+    try {
+      hist = await sqlQuery(
+        `SELECT captured_at, min(next_available_at) AS best, sum(avail_24h) AS slots_24h
+           FROM capacity.ob_calendar_rep_daily
+          WHERE calendar_set = $1 AND name = $2 AND captured_at >= now() - interval '14 days'
+          GROUP BY captured_at ORDER BY captured_at`, [CALENDAR_SET, name]);
+      repHistCache[name] = hist;
+    } catch(e){ hist = []; }
+  }
+  drawSeries(hist.map(r=>daysUntil(r.best, r.captured_at)), hist.map(r=>r.captured_at), 'Days to earliest slot');
+}
+
+// ── chart: always a single series, so no categorical palette and no legend ────
+function stampsFor(pred){ return [...new Set(segHistory.filter(pred).map(r=>r.captured_at))].sort(); }
+function metricTitle(m){
+  return m==='avail_24h' ? 'Open slots · next 24h'
+       : m==='avail_48h' ? 'Open slots · next 48h'
+       : 'Avg days to next slot';
+}
+
+function drawSeries(data, stamps, title){
+  const el = document.getElementById('chart'); if(!el) return;
+  const labels = stamps.map(s=>new Date(s).toLocaleString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',hour:'numeric',hour12:true}));
+  if(chart) chart.destroy();
+  const ctx = el.getContext('2d');
+  const grad = ctx.createLinearGradient(0,0,0,300);
+  grad.addColorStop(0,'rgba(42,120,214,0.22)'); grad.addColorStop(1,'rgba(42,120,214,0.01)');
+
+  chart = new Chart(ctx,{
+    type:'line',
+    data:{ labels, datasets:[{
+      label:title, data, borderColor:'#2a78d6', backgroundColor:grad,
+      borderWidth:2, fill:true, tension:.3, pointRadius:stamps.length>40?0:3,
+      pointBackgroundColor:'#2a78d6', pointHoverRadius:5, spanGaps:true
+    }]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ display:false },   // single series — the panel title names it
+        tooltip:{
+          backgroundColor:'#0b0b0b', padding:10, cornerRadius:8,
+          titleFont:{family:'Inter'}, bodyFont:{family:'Inter'},
+          callbacks:{ label:c=>`${title}: ${c.parsed.y}` }
+        }
+      },
+      scales:{
+        x:{ grid:{display:false}, ticks:{ color:'#898781', maxRotation:0, autoSkip:true, maxTicksLimit:8, font:{family:'Inter',size:11} } },
+        y:{ beginAtZero:true, grid:{color:'#e1e0d9'}, border:{display:false}, ticks:{ color:'#898781', font:{family:'Inter',size:11} } }
+      }
+    }
+  });
+}
+
+fetchData();
+setInterval(fetchData, REFRESH_MS);
+</script>
+</body>
+</html>
