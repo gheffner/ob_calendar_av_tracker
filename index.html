@@ -175,7 +175,7 @@
 
   <footer>
     Source: <code>capacity.ob_calendar_segment_daily</code> · <code>capacity.ob_calendar_rep_daily</code> ·
-    refreshed every 60s · SLA threshold: next slot within <span id="thr">1</span> day
+    refreshed every 60s · SLA: next slot within <span id="thr">48</span> hours
   </footer>
 </div>
 
@@ -196,7 +196,7 @@ async function sqlQuery(sql, params = []) {
 }
 
 const CALENDAR_SET = 'ob_2026_07';
-const THRESHOLD    = 1;          // days — matches the RevOps threshold alert
+const SLA_HOURS    = 48;         // hours — matches OB Daily Calendly Av. Slack Alert v2
 const REFRESH_MS   = 60_000;
 // Derived from the data, not hardcoded — the tracker's Config node decides how many
 // event types each specialist is measured on, and that list is expected to change.
@@ -220,6 +220,19 @@ function daysUntil(iso, refIso){
   if(!iso) return null;
   return etDayNum(iso) - etDayNum(refIso || Date.now());
 }
+// Hours from a reference point to the slot. Current-state health is measured from
+// NOW (the page re-reads every 60s) so it answers "can someone book inside the SLA
+// right now" — the same question, on the same clock, as the Slack alert. Historical
+// series stay capture-relative: a past run's distance must be measured from that run.
+function hoursUntil(iso, refIso){
+  if(!iso) return null;
+  return (new Date(iso) - (refIso ? new Date(refIso) : new Date())) / 3600000;
+}
+function fmtHours(h){
+  if(h === null) return '—';
+  if(h < 0) return '0';
+  return h < 72 ? String(Math.round(h)) : `${(h/24).toFixed(1)}d`;
+}
 function etTime(iso){ return iso ? new Date(iso).toLocaleString('en-US',{timeZone:'America/New_York',hour:'numeric',minute:'2-digit',hour12:true}) : '—'; }
 function etDateTime(iso){ return iso ? new Date(iso).toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true}) : '—'; }
 function etDay(d){ return new Date(d).toLocaleDateString('en-US',{timeZone:'America/New_York'}); }
@@ -235,13 +248,15 @@ function relNext(iso){
   return etDateTime(iso);
 }
 
-// Health from days-until-next-slot vs threshold. Status is never color-alone:
-// every use pairs the icon with the label.
-function health(days){
-  if(days === null) return {k:'critical', icon:'⛔', label:'No slots'};
-  if(days <= 0)      return {k:'good',     icon:'✅', label:'Today'};
-  if(days <= THRESHOLD) return {k:'warning', icon:'⚠️', label:'Tomorrow'};
-  return {k:'critical', icon:'⛔', label:`${days}d out`};
+// Health from hours-until-next-slot vs the 48h SLA. Inside 24h is comfortable,
+// 24-48h is still within SLA but worth watching, past 48h is a breach — the same
+// line the Slack alert draws. Status is never color-alone: every use pairs the
+// icon with the label.
+function health(hours){
+  if(hours === null)        return {k:'critical', icon:'⛔', label:'No slots'};
+  if(hours <= 24)           return {k:'good',     icon:'✅', label: hours <= 0.5 ? 'Now' : `${Math.max(1,Math.round(hours))}h`};
+  if(hours <= SLA_HOURS)    return {k:'warning',  icon:'⚠️', label:`${Math.round(hours)}h`};
+  return {k:'critical', icon:'⛔', label:`${fmtHours(hours)}${hours < 72 ? 'h' : ''} out`};
 }
 
 // Unit tiers sort by prospect size, not alphabetically; Spanish sorts last.
@@ -339,10 +354,10 @@ function allReps(){
       with24: rows.filter(r=>(num(r.avail_24h)||0) > 0).length,
       with48: rows.filter(r=>(num(r.avail_48h)||0) > 0).length,
       best,
-      days: daysUntil(best, capturedAt),
+      hours: hoursUntil(best),
     };
   }).sort((a,b)=>{
-    const da = a.days === null ? 9e9 : a.days, db = b.days === null ? 9e9 : b.days;
+    const da = a.hours === null ? 9e9 : a.hours, db = b.hours === null ? 9e9 : b.hours;
     return db - da || a.name.localeCompare(b.name);   // worst first — managers act on these
   });
 }
@@ -395,8 +410,8 @@ function renderOverview(){
   const repsToday  = allRepNames.filter(n=>daysUntil(repBest(n), capturedAt)===0).length;
   const soonest = [...segLatest.map(r=>r.next_available_at), ...repLatest.map(r=>r.next_available_at)]
     .filter(Boolean).sort()[0] || null;
-  const breach = tiers.map(t=>daysUntil(t.next_available_at, capturedAt))
-    .filter(d=>d===null || d>THRESHOLD).length;
+  const breach = tiers.map(t=>hoursUntil(t.next_available_at))
+    .filter(h=>h===null || h>SLA_HOURS).length;
 
   const kpis = `
     <div class="kpis">
@@ -418,13 +433,13 @@ function renderOverview(){
       <div class="kpi ${breach>0?'alert':'ok'}">
         <div class="label">Over SLA</div>
         <div class="value">${breach}</div>
-        <div class="sub">unit tiers past ${THRESHOLD}-day threshold</div>
+        <div class="sub">unit tiers past the ${SLA_HOURS}h SLA</div>
       </div>
     </div>`;
 
   // ── round-robin tier cards ──
   const tierCards = tiers.map(t=>{
-    const d = daysUntil(t.next_available_at, capturedAt), hs = health(d);
+    const h = hoursUntil(t.next_available_at), hs = health(h);
     const runs = histFor(r=>r.type==='RR' && r.unit_tier===t.unit_tier, 'avail_24h');
     return `
       <div class="card clickable ${hs.k}" onclick="location.hash='#/tier/${encodeURIComponent(t.unit_tier)}'">
@@ -444,11 +459,11 @@ function renderOverview(){
 
   // ── specialists, flat (no market-segment grouping) ──
   const repRows = reps.map(r=>{
-    const hs = health(r.days);
+    const hs = health(r.hours);
     return `<tr class="clickable" onclick="location.hash='#/rep/${encodeURIComponent(r.name)}'">
       <td><span class="dot ${hs.k}"></span><span class="rowlink">${esc(r.name)}</span></td>
       <td style="color:var(--muted)">${esc(r.username)}</td>
-      <td class="num">${r.days ?? '—'}</td>
+      <td class="num">${fmtHours(r.hours)}</td>
       <td class="num">${r.with24}<span style="color:var(--dim)">/${r.eventTypes}</span></td>
       <td class="num">${r.with48}<span style="color:var(--dim)">/${r.eventTypes}</span></td>
       <td style="text-align:right;color:var(--muted)">${etDateTime(r.best)}</td>
@@ -458,11 +473,11 @@ function renderOverview(){
   // ── unit tier table ──
   const tableRows = [
     ...tiers.map(t=>{
-      const d = daysUntil(t.next_available_at, capturedAt), hs = health(d);
+      const h = hoursUntil(t.next_available_at), hs = health(h);
       return `<tr class="clickable" onclick="location.hash='#/tier/${encodeURIComponent(t.unit_tier)}'">
         <td><span class="dot ${hs.k}"></span>Round-robin</td>
         <td class="rowlink">${esc(t.unit_tier)}</td>
-        <td class="num">${d ?? '—'}</td>
+        <td class="num">${fmtHours(h)}</td>
         <td class="num">${num(t.avail_24h) ?? '—'}</td>
         <td class="num">${num(t.avail_48h) ?? '—'}</td>
         <td style="text-align:right;color:var(--muted)">${etDateTime(t.next_available_at)}</td></tr>`;
@@ -478,7 +493,7 @@ function renderOverview(){
     <div class="section-title">Specialists <span class="count">· ${reps.length} people · worst availability first · click a name for their calendars</span></div>
     <div class="panel">
       <div class="scroll"><table>
-        <thead><tr><th>Specialist</th><th>Calendly</th><th class="num">Days to slot</th>
+        <thead><tr><th>Specialist</th><th>Calendly</th><th class="num">Hrs to slot</th>
           <th class="num">Open ≤24h</th><th class="num">Open ≤48h</th>
           <th style="text-align:right">Earliest (ET)</th><th>Status</th></tr></thead>
         <tbody>${repRows || '<tr><td colspan="7" style="color:var(--muted)">No specialist rows in the latest run.</td></tr>'}</tbody>
@@ -512,7 +527,7 @@ function renderOverview(){
       <div style="overflow-x:auto">
       <table>
         <thead><tr>
-          <th>Kind</th><th>Unit tier</th><th class="num">Days to slot</th>
+          <th>Kind</th><th>Unit tier</th><th class="num">Hrs to slot</th>
           <th class="num">Next 24h</th><th class="num">Next 48h</th>
           <th style="text-align:right">Next available (ET)</th>
         </tr></thead>
@@ -522,7 +537,7 @@ function renderOverview(){
     </div>`;
 
   document.getElementById('run-meta').innerHTML = `Latest run<br><strong>${etDateTime(capturedAt)} ET</strong>`;
-  document.getElementById('thr').textContent = THRESHOLD;
+  document.getElementById('thr').textContent = SLA_HOURS;
   document.querySelectorAll('#metric-toggle button').forEach(b=>{
     b.onclick = ()=>{
       document.querySelectorAll('#metric-toggle button').forEach(x=>x.classList.remove('active'));
@@ -538,7 +553,7 @@ function renderTier(tier){
   const row = rrTiers().find(t=>t.unit_tier === tier);
   if(!row){ location.hash = '#/'; return; }
   setHead(tier, 'Round-robin kickoff calendar for this unit band.');
-  const d = daysUntil(row.next_available_at, capturedAt), hs = health(d);
+  const h = hoursUntil(row.next_available_at), hs = health(h);
   const cal = repLatest.find(r=>r.type==='RR' && r.unit_tier===tier);
 
   const runs = segHistory.filter(r=>r.type==='RR' && r.unit_tier===tier).sort((a,b)=>a.captured_at.localeCompare(b.captured_at));
@@ -552,7 +567,7 @@ function renderTier(tier){
   document.getElementById('content').innerHTML = `
     <div class="crumbs"><a href="#/">← Overview</a><span class="sep">/</span><span>${esc(tier)}</span></div>
     <div class="kpis">
-      <div class="kpi"><div class="label">Status</div><div class="value" style="font-size:1.35rem">${hs.icon} ${hs.label}</div><div class="sub">vs ${THRESHOLD}-day SLA</div></div>
+      <div class="kpi"><div class="label">Status</div><div class="value" style="font-size:1.35rem">${hs.icon} ${hs.label}</div><div class="sub">vs ${SLA_HOURS}h SLA</div></div>
       <div class="kpi"><div class="label">Next slot</div><div class="value" style="font-size:1.35rem">${relNext(row.next_available_at)}</div><div class="sub">${etDateTime(row.next_available_at)} ET</div></div>
       <div class="kpi"><div class="label">Slots next 24h</div><div class="value">${num(row.avail_24h) ?? '—'}</div><div class="sub">${num(row.avail_48h) ?? '—'} within 48h</div></div>
       <div class="kpi"><div class="label">Slots after first</div><div class="value">${num(row.slots_48h_after_first) ?? '—'}</div><div class="sub">within 48h of the first slot</div></div>
@@ -589,15 +604,15 @@ async function renderRep(name){
   if(!rows.length){ location.hash = '#/'; return; }
   setHead(name, `${rows.length} managed calendar${rows.length===1?'':'s'}`);
 
-  const best = repBest(name), bd = daysUntil(best, capturedAt);
+  const best = repBest(name), bh = hoursUntil(best);
   const with24 = rows.filter(r=>(num(r.avail_24h)||0)>0).length;
   const booked = rows.filter(r=>!r.next_available_at).length;
 
   const evRows = rows.map(r=>{
-    const d = daysUntil(r.next_available_at, capturedAt), hs = health(d);
+    const h = hoursUntil(r.next_available_at), hs = health(h);
     return `<tr>
       <td><span class="dot ${hs.k}"></span>${esc(r.event_type)}</td>
-      <td class="num">${d ?? '—'}</td>
+      <td class="num">${fmtHours(h)}</td>
       <td class="num">${num(r.avail_24h) ?? '—'}</td>
       <td class="num">${num(r.avail_48h) ?? '—'}</td>
       <td class="num">${num(r.slot_count) ?? '—'}</td>
@@ -608,7 +623,7 @@ async function renderRep(name){
   document.getElementById('content').innerHTML = `
     <div class="crumbs"><a href="#/">← Overview</a><span class="sep">/</span><span>${esc(name)}</span></div>
     <div class="kpis">
-      <div class="kpi"><div class="label">Earliest slot</div><div class="value" style="font-size:1.35rem">${relNext(best)}</div><div class="sub">${bd ?? '—'} days out</div></div>
+      <div class="kpi"><div class="label">Earliest slot</div><div class="value" style="font-size:1.35rem">${relNext(best)}</div><div class="sub">${bh === null ? '—' : fmtHours(bh) + (bh < 72 ? 'h' : '') + ' out'}</div></div>
       <div class="kpi"><div class="label">Calendars open ≤24h</div><div class="value">${with24}<span style="font-size:1rem;color:var(--dim);font-weight:600">/${rows.length}</span></div><div class="sub">have a slot in the next 24h</div></div>
       <div class="kpi ${booked>0?'alert':'ok'}"><div class="label">Fully booked</div><div class="value">${booked}</div><div class="sub">no slot in the 7-day horizon</div></div>
       <div class="kpi"><div class="label">Total slots</div><div class="value">${rows.reduce((s,r)=>s+(num(r.slot_count)||0),0)}</div><div class="sub">across the 7-day horizon</div></div>
@@ -617,7 +632,7 @@ async function renderRep(name){
     <div class="panel">
       <div class="panel-head"><div><h3>Calendars</h3><p>Latest run · ${esc(name)}</p></div></div>
       <div style="overflow-x:auto"><table>
-        <thead><tr><th>Event type</th><th class="num">Days to slot</th><th class="num">Next 24h</th>
+        <thead><tr><th>Event type</th><th class="num">Hrs to slot</th><th class="num">Next 24h</th>
           <th class="num">Next 48h</th><th class="num">Slots (7d)</th>
           <th style="text-align:right">Next available (ET)</th><th>Status</th></tr></thead>
         <tbody>${evRows}</tbody>

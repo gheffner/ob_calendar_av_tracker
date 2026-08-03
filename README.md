@@ -6,7 +6,12 @@ event types. Sibling of `sales_rep_av_tracker`; same deployment shape, same desi
 
 Live data is produced by the n8n workflow **`ob_calendly_next_availability_v2`**, which writes a
 snapshot into `capacity.ob_calendar_rep_daily` and `capacity.ob_calendar_segment_daily` with
-`calendar_set = 'ob_2026_07'`.
+`calendar_set = 'ob_2026_07'` at 07:00 and 15:00.
+
+The "snapshot updated, dashboard refreshed" ping in #onboarding-calendar-alerts no longer comes
+from that workflow — its Slack node was removed on 2026-08-03. `OB Daily Calendly Av. Slack Alert v2`
+polls the segment table every 30 minutes and posts once per new `captured_at`, carrying the
+snapshot notice and the 48h SLA verdict in a single message.
 
 ## The three levels
 
@@ -34,15 +39,26 @@ are listed individually and drill straight to the person.
 
 | Section | Meaning |
 |---|---|
-| KPI tiles | unit tiers available today, soonest slot anywhere, specialists available today, segments over the SLA threshold |
+| KPI tiles | unit tiers available today, soonest slot anywhere, specialists available today, unit tiers past the 48h SLA |
 | Round-robin cards | per unit band: next slot, open slots in 24h / 48h, days out, 14-day sparkline |
 | Specialist table | every specialist, worst availability first: days to slot, calendars open in 24h / 48h, earliest slot |
 | Trend chart | one metric across the round-robins, per run, last 14 days |
 | Tables | every unit tier and every specialist at the latest run |
 
-Health / SLA threshold = next slot within **1 day**, matching the sales tracker and the RevOps
-threshold alert. "Days to slot" is computed in the browser from `next_available_at` against
-**Eastern** calendar days, so "today" always means today in ET.
+## The 48h SLA
+
+Health threshold = **next bookable slot within 48 hours**. A round robin is green inside 24h,
+amber from 24h to 48h, and red past 48h or with no slot at all in Calendly's 7-day horizon.
+This is the same line drawn by the Slack workflow **`OB Daily Calendly Av. Slack Alert v2`** —
+the two must not drift, or the page will show red while the channel stays quiet.
+
+Note this is deliberately *not* the sales tracker's threshold, which is still 1 day.
+
+"Hrs to slot" is computed in the browser from `next_available_at` against **now**, not against
+`captured_at`, so the page answers "can someone book inside the SLA right now" on the same clock
+the alert uses. The page re-reads every 60s, so the number stays live between snapshots.
+Historical series stay capture-relative: a past run's distance to its earliest slot has to be
+measured from that run, not from today.
 
 ## How the SQL proxy works
 
