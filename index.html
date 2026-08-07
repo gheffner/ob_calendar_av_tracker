@@ -440,6 +440,7 @@ function renderOverview(){
   // ── round-robin tier cards ──
   const tierCards = tiers.map(t=>{
     const h = hoursUntil(t.next_available_at), hs = health(h);
+    const d = daysUntil(t.next_available_at, capturedAt);
     const runs = histFor(r=>r.type==='RR' && r.unit_tier===t.unit_tier, 'avail_24h');
     return `
       <div class="card clickable ${hs.k}" onclick="location.hash='#/tier/${encodeURIComponent(t.unit_tier)}'">

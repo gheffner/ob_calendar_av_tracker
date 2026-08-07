@@ -99,7 +99,17 @@ view pairs its chart with a table.
 
 ## Status
 
-Not yet verified against real data — both tables stay empty until
-`ob_calendly_next_availability_v2` runs for the first time. The queries have been executed against
-the live tables to confirm they parse and return the expected shape, but the page has not been
-seen rendering live rows.
+Not yet verified against real data — the queries have been executed against the live tables to
+confirm they parse and return the expected shape, but the page has not been seen rendering live
+rows.
+
+**Fixed 2026-08-04:** the overview never rendered. The round-robin tier card referenced an
+undeclared `d` inside a template literal ("Days out"), which threw a `ReferenceError` out of
+`renderOverview` on every load and left the page stuck on "Loading availability…" — regardless of
+whether the tables had data. `d` is now derived with `daysUntil(t.next_available_at, capturedAt)`.
+Found by the render harness in the sibling `sales_rep_av_tracker` directory, which drives every
+route against synthetic rows:
+
+```sh
+node ../sales_rep_av_tracker/_render_test.mjs index.html ob
+```
