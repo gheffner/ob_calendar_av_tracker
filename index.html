@@ -861,7 +861,7 @@ function renderCapResults(){
 
   box.innerHTML = `
     <div class="section-title">${esc(pool.label)} <span class="count">· ${rows.length} onboarder${rows.length === 1 ? '' : 's'} · most room first · times in ET, today through ${new Date(endDay * 86400000).toLocaleDateString('en-US',{timeZone:'UTC',weekday:'long'})}</span></div>
-    ${stale ? `<div class="note" style="border-left-color:var(--warning)">⚠️ This ranking is from ${etDateTime(ranAt)} ET, more than ${CAP_STALE_HOURS} hours ago. Capacity refreshes every 15 minutes from 7am to 8:45pm ET on weekdays and hourly from 8am to 8pm on weekends.</div>` : ''}
+    ${stale ? `<div class="note" style="border-left-color:var(--warning)">⚠️ This ranking is from ${etDateTime(ranAt)} ET, more than ${CAP_STALE_HOURS} hours ago, so some of these times may have been booked since. Calendly shows what’s still open when you book.</div>` : ''}
     ${relaxed ? `<div class="note">Nobody in this pool is both under capacity and open soon, so they’re ranked by who has the most room left.</div>` : ''}
     <div class="pick">${list || '<div class="state-msg">No onboarders in this pool.</div>'}</div>
     <div class="note">
