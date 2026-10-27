@@ -146,7 +146,50 @@
   footer { text-align:center; color:var(--dim); font-size:.76rem; margin-top:30px; }
   footer a { color:var(--muted); }
 
+  /* ── Nav link ── */
+  .nav-right { display:flex; align-items:center; gap:14px; }
+  .nav-link { font-size:.82rem; font-weight:600; color:var(--data); text-decoration:none; white-space:nowrap; }
+  .nav-link:hover { text-decoration:underline; }
+
+  /* ── Kickoff picker ── */
+  .cap-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; }
+  .cap-grid label { display:flex; flex-direction:column; gap:5px; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:600; }
+  .cap-grid input {
+    font-family:'Inter',sans-serif; font-size:.92rem; color:var(--text); text-transform:none; letter-spacing:0;
+    border:1px solid var(--border); border-radius:8px; padding:9px 11px; background:var(--card); width:100%;
+  }
+  .cap-grid input:focus { outline:none; border-color:var(--data); box-shadow:0 0 0 3px var(--data-soft); }
+  .cap-grid label.units input { font-weight:700; }
+  .cap-hint { font-size:.78rem; color:var(--muted); margin-top:10px; }
+  .cap-hint.warn { color:#9a6a00; }
+  .pick { background:var(--card); border:1px solid var(--border); border-radius:14px; overflow:hidden; margin-bottom:22px; }
+  .pick-row { display:grid; grid-template-columns:34px minmax(0,1.1fr) minmax(0,2.4fr) auto; gap:14px; align-items:center; padding:14px 16px; border-bottom:1px solid var(--border); }
+  .pick-row:last-child { border-bottom:none; }
+  .pick-row.best { background:rgba(42,120,214,0.05); }
+  .pick-row.dim { color:var(--muted); }
+  .pick-rank { font-family:'Plus Jakarta Sans',sans-serif; font-weight:800; font-size:1.15rem; color:var(--dim); text-align:center; }
+  .pick-row.best .pick-rank { color:var(--data); }
+  .pick-who strong { display:block; font-weight:600; }
+  .pick-who .badge { margin-top:5px; }
+  .pick-times { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip {
+    font-size:.78rem; font-weight:600; color:var(--data); background:var(--data-soft); border:1px solid transparent;
+    border-radius:20px; padding:5px 10px; text-decoration:none; white-space:nowrap;
+  }
+  .chip:hover { border-color:var(--data); }
+  .pick-none { font-size:.8rem; color:var(--dim); }
+  .pick-book {
+    font-size:.82rem; font-weight:700; color:#fff; background:var(--data); border-radius:8px;
+    padding:8px 14px; text-decoration:none; white-space:nowrap;
+  }
+  .pick-row.dim .pick-book { background:var(--card); color:var(--data); border:1px solid var(--border); }
+
   @media (max-width:720px){
+    nav { padding:0 16px; }
+    .brand { font-size:.92rem; }
+    .status-pill { display:none; }
+    .pick-row { grid-template-columns:28px minmax(0,1fr) auto; }
+    .pick-times { grid-column:2 / -1; grid-row:2; }
     .kpis { grid-template-columns:repeat(2,1fr); }
     .page-head { align-items:flex-start; }
     .run-meta { text-align:left; }
@@ -157,7 +200,10 @@
 
 <nav>
   <div class="brand"><span class="brand-dot"></span>Onboarding Calendar Availability</div>
-  <div class="status-pill"><span class="status-dot"></span><span id="live-label">Live</span></div>
+  <div class="nav-right">
+    <a class="nav-link" href="#/capacity">Book a kickoff</a>
+    <div class="status-pill"><span class="status-dot"></span><span id="live-label">Live</span></div>
+  </div>
 </nav>
 
 <div class="wrap">
@@ -174,8 +220,10 @@
   </div>
 
   <footer>
-    Source: <code>capacity.ob_calendar_segment_daily</code> · <code>capacity.ob_calendar_rep_daily</code> ·
-    refreshed every 60s · SLA: next slot within <span id="thr">48</span> hours
+    <span id="foot-default">Source: <code>capacity.ob_calendar_segment_daily</code> · <code>capacity.ob_calendar_rep_daily</code> ·
+    refreshed every 60s · SLA: next slot within <span id="thr">48</span> hours</span>
+    <span id="foot-capacity" hidden>Source: <code>capacity.ob_capacity_stack_latest</code> (n8n "Onboarder Capacity", every 15 min) ·
+    refreshed every 60s</span>
   </footer>
 </div>
 
@@ -380,6 +428,9 @@ function route(){
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
   const [view, ...rest] = h.split('/');
   const key = rest.join('/');
+  document.getElementById('foot-default').hidden = view === 'capacity';
+  document.getElementById('foot-capacity').hidden = view !== 'capacity';
+  if(view === 'capacity')       return renderCapacity(key);
   if(view === 'tier'    && key) return renderTier(key);
   if(view === 'rep'     && key) return renderRep(key);
   renderOverview();
@@ -659,6 +710,166 @@ async function renderRep(name){
     } catch(e){ hist = []; }
   }
   drawSeries(hist.map(r=>daysUntil(r.best, r.captured_at)), hist.map(r=>r.captured_at), 'Days to earliest slot');
+}
+
+// ── KICKOFF PICKER — book a kickoff by hand from the capacity ranking ─────────
+// The go-live fallback (GTM-2740): when a new customer's welcome text doesn't arrive, the AE
+// on the call books the kickoff here. The ranking is the one the handoff agent picks from,
+// written every 15 min by the n8n workflow "Onboarder Capacity" (GTM-2866): per unit-count
+// pool, rank 1 = the onboarder with the most room. Booking through the onboarder's own
+// kickoff link makes them the account's onboarding owner, which also stops the agent.
+let capStack = [];      // capacity.ob_capacity_stack_latest, one row per pool and rank
+let capError = null;
+const CAP_STALE_HOURS = 3;     // same age at which the pick tool warns
+const CAP_MIN_LEAD_MS = 2 * 3600000;   // offered times are at least 2 h away, as in the welcome text
+
+async function fetchCapacity(){
+  try {
+    capStack = await sqlQuery(
+      `SELECT pool_key, max_units, rank, name, headroom_h, earliest_slot, kickoff_link,
+              next_slots, bookable, over_capacity, mode, ran_at
+         FROM capacity.ob_capacity_stack_latest
+        ORDER BY max_units NULLS LAST, rank`);
+    capError = null;
+  } catch(err){ capError = err.message; }
+}
+
+// Pools in unit order, each with its label: max_units is the top of the pool's range, null = no cap.
+function capPools(){
+  const seen = new Map();
+  capStack.forEach(r=>{ if(!seen.has(r.pool_key)) seen.set(r.pool_key, r.max_units === null ? null : Number(r.max_units)); });
+  const pools = [...seen].map(([key,max])=>({key, max}))
+    .sort((a,b)=>(a.max ?? Infinity) - (b.max ?? Infinity));
+  let lo = 1;
+  pools.forEach(p=>{ p.label = p.max === null ? `${lo}+ units` : `${lo}-${p.max} units`; if(p.max !== null) lo = p.max + 1; });
+  return pools;
+}
+// 0 or blank units count as the smallest pool (the capacity model's rule).
+function poolFor(units, pools){
+  return pools.find(p=>p.max === null || units <= p.max) || pools[pools.length-1];
+}
+
+// Last ET day the times may fall on: the second business day after today, as in the welcome text.
+function offerWindowEndDay(){
+  let d = etDayNum(Date.now()), added = 0;
+  while(added < 2){ d += 1; const wd = new Date(d * 86400000).getUTCDay(); if(wd !== 0 && wd !== 6) added++; }
+  return d;
+}
+function dayLabel(iso){
+  const diff = etDayNum(iso) - etDayNum(Date.now());
+  if(diff === 0) return 'Today';
+  if(diff === 1) return 'Tomorrow';
+  return new Date(iso).toLocaleDateString('en-US',{timeZone:'America/New_York',weekday:'short'});
+}
+
+function capForm(){
+  const v = id => (document.getElementById(id)?.value || '').trim();
+  const u = v('cap-units');
+  const units = /^\d+$/.test(u) ? Number(u) : null;
+  const account = v('cap-account');
+  return {
+    units, name:v('cap-name'), email:v('cap-email'), phone:v('cap-phone'), account,
+    accountOk: /^001[A-Za-z0-9]{12}([A-Za-z0-9]{3})?$/.test(account),
+  };
+}
+// US/Canada numbers to +1XXXXXXXXXX, which Calendly's phone question accepts; anything else as typed.
+function e164(phone){
+  const d = phone.replace(/\D/g,'');
+  if(d.length === 10) return `+1${d}`;
+  if(d.length === 11 && d[0] === '1') return `+${d}`;
+  return phone;
+}
+// The onboarder's kickoff link, filled in for the customer: name, email, the two required
+// questions (a1 = the email they registered with, a2 = phone) and the Salesforce account so the
+// booking lands on the right account. With a time, the link opens the booking form for that
+// exact time (Calendly's /<event>/<start in UTC> path; checked in Chrome 2026-10-27).
+function bookingUrl(link, f, iso){
+  let u;
+  try { u = new URL(link); } catch(e){ return '#'; }
+  if(iso) u.pathname = `${u.pathname.replace(/\/$/, '')}/${new Date(iso).toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
+  if(f.name)  u.searchParams.set('name', f.name);
+  if(f.email){ u.searchParams.set('email', f.email); u.searchParams.set('a1', f.email); }
+  if(f.phone) u.searchParams.set('a2', e164(f.phone));
+  if(f.accountOk) u.searchParams.set('salesforce_uuid', f.account);
+  return u.toString();
+}
+
+async function renderCapacity(key){
+  setHead('Book a kickoff', 'Use this when the welcome text hasn’t reached the customer. Book the first onboarder with a time that suits them.');
+  if(!document.getElementById('cap-form')){
+    document.getElementById('content').innerHTML = `
+      <div class="crumbs"><a href="#/">← Overview</a><span class="sep">/</span><span>Book a kickoff</span></div>
+      <div class="panel" id="cap-form">
+        <div class="cap-grid">
+          <label class="units">Units<input id="cap-units" type="number" min="0" step="1" inputmode="numeric" placeholder="Units"></label>
+          <label>Customer name<input id="cap-name" autocomplete="off" placeholder="First and last name"></label>
+          <label>Registered email<input id="cap-email" type="email" autocomplete="off" placeholder="name@company.com"></label>
+          <label>Phone<input id="cap-phone" type="tel" autocomplete="off" placeholder="(555) 555-5555"></label>
+          <label>Salesforce account ID<input id="cap-account" autocomplete="off" placeholder="001…"></label>
+        </div>
+        <p class="cap-hint" id="cap-hint">Only units are needed. The rest fills in the booking form so the kickoff lands on the right Salesforce account.</p>
+      </div>
+      <div id="cap-results"><div class="state-msg">Loading capacity…</div></div>`;
+    if(/^\d+$/.test(key || '')) document.getElementById('cap-units').value = key;
+    document.querySelectorAll('#cap-form input').forEach(i=>i.addEventListener('input', renderCapResults));
+  }
+  await fetchCapacity();
+  renderCapResults();
+}
+
+function renderCapResults(){
+  const box = document.getElementById('cap-results'); if(!box) return;
+  const ranAt = capStack[0]?.ran_at || null;
+  document.getElementById('run-meta').innerHTML = ranAt ? `Capacity as of<br><strong>${etDateTime(ranAt)} ET</strong>` : 'No capacity run yet';
+  const f = capForm();
+  const hint = document.getElementById('cap-hint');
+  const badAccount = f.account && !f.accountOk;
+  hint.classList.toggle('warn', !!badAccount);
+  hint.textContent = badAccount
+    ? 'That isn’t a Salesforce account ID (they start with 001), so it won’t be sent. Calendly will match the booking by email instead.'
+    : 'Only units are needed. The rest fills in the booking form so the kickoff lands on the right Salesforce account.';
+
+  if(capError){ box.innerHTML = `<div class="state-msg">⚠️ Couldn’t load capacity: ${esc(capError)}</div>`; return; }
+  if(!capStack.length){ box.innerHTML = `<div class="state-msg">No capacity run is stored yet.</div>`; return; }
+  if(f.units === null){ box.innerHTML = `<div class="state-msg">Enter the customer’s unit count to see who to book.</div>`; return; }
+
+  const pool = poolFor(f.units, capPools());
+  const rows = capStack.filter(r=>r.pool_key === pool.key).sort((a,b)=>a.rank - b.rank);
+  const relaxed = rows.some(r=>r.mode && r.mode !== 'NORMAL');
+  const stale = (Date.now() - new Date(ranAt)) / 3600000 > CAP_STALE_HOURS;
+  const now = Date.now(), endDay = offerWindowEndDay();
+
+  const list = rows.map(r=>{
+    const slots = (Array.isArray(r.next_slots) ? r.next_slots : JSON.parse(r.next_slots || '[]'))
+      .filter(iso=>new Date(iso) - now >= CAP_MIN_LEAD_MS);
+    const soon = slots.filter(iso=>etDayNum(iso) <= endDay);
+    const head = num(r.headroom_h);
+    const room = r.over_capacity
+      ? `<span class="badge warning">⚠️ ${head !== null && head < 0 ? `Over by ${Math.abs(head).toFixed(1)} h` : 'Full'}</span>`
+      : `<span class="badge good">✅ ${head === null ? '—' : head.toFixed(1)} h free</span>`;
+    const times = soon.length
+      ? soon.slice(0,6).map(iso=>`<a class="chip" href="${esc(bookingUrl(r.kickoff_link, f, iso))}" target="_blank" rel="noopener">${dayLabel(iso)} ${etTime(iso)}</a>`).join('')
+      : `<span class="pick-none">${slots.length ? `No time before ${esc(dayLabel(slots[0]))} · next ${etDateTime(slots[0])} ET` : 'No open kickoff time found'}</span>`;
+    const dim = !r.bookable || !soon.length;
+    return `<div class="pick-row ${r.rank === 1 && !dim ? 'best' : ''} ${dim ? 'dim' : ''}">
+      <div class="pick-rank">${r.rank}</div>
+      <div class="pick-who"><strong>${esc(r.name)}</strong>${room}</div>
+      <div class="pick-times">${times}</div>
+      <a class="pick-book" href="${esc(bookingUrl(r.kickoff_link, f))}" target="_blank" rel="noopener">Book ›</a>
+    </div>`;
+  }).join('');
+
+  box.innerHTML = `
+    <div class="section-title">${esc(pool.label)} <span class="count">· ${rows.length} onboarder${rows.length === 1 ? '' : 's'} · most room first · times in ET, today through ${new Date(endDay * 86400000).toLocaleDateString('en-US',{timeZone:'UTC',weekday:'long'})}</span></div>
+    ${stale ? `<div class="note" style="border-left-color:var(--warning)">⚠️ This ranking is from ${etDateTime(ranAt)} ET, more than ${CAP_STALE_HOURS} hours ago. Capacity refreshes every 15 minutes from 7am to 8:45pm ET on weekdays and hourly from 8am to 8pm on weekends.</div>` : ''}
+    ${relaxed ? `<div class="note">Nobody in this pool is both under capacity and open soon, so they’re ranked by who has the most room left.</div>` : ''}
+    <div class="pick">${list || '<div class="state-msg">No onboarders in this pool.</div>'}</div>
+    <div class="note">
+      Go down the list and book the first onboarder with a time the customer accepts. Click a time to open the
+      booking form for it, or <strong>Book</strong> for that onboarder’s whole calendar. Times were open at the last
+      capacity run, so if Calendly says a time is gone, pick another. If the customer already got a text from an
+      onboarder, book with that onboarder.
+    </div>`;
 }
 
 // ── chart: always a single series, so no categorical palette and no legend ────
