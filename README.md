@@ -20,8 +20,36 @@ snapshot notice and the 48h SLA verdict in a single message.
 | `#/` | Overview | KPI tiles · 7 round-robin unit-tier cards · flat specialist table · trend chart · unit-tier table |
 | `#/tier/{unit_tier}` | Round-robin detail | That calendar's numbers and its last 28 runs |
 | `#/rep/{name}` | Specialist detail | That person's calendars, each with next slot / 24h / 48h / status |
+| `#/capacity[/{units}]` | Book a kickoff | The onboarder capacity ranking for a customer's unit count, with booking links (below) |
 
 Routing is hash-based, so any drill-down state is a shareable link and the back button works.
+
+## Book a kickoff (`#/capacity`, GTM-2740)
+
+The go-live fallback for the onboarding handoff agent: when a new customer's welcome text doesn't
+arrive, the AE on the call books the kickoff here. `#/capacity/35` opens with 35 units filled in.
+
+- **Data:** `capacity.ob_capacity_stack_latest`, the newest run of the per-pool ranking the n8n
+  workflow "Onboarder Capacity" (`heF364QwvIVdzdTU`) writes every 15 minutes (GTM-2834 / GTM-2866).
+  It's the same ranking the handoff agent picks from. Rank 1 is the onboarder with the most room.
+- **Pool:** the unit count picks the pool by `max_units`, with no cap on the last one. 0 units counts
+  as the smallest pool, the capacity model's rule.
+- **Times:** in ET, at least 2 hours away, from today through the second business day after today.
+  These are the welcome text's rules. Up to six per onboarder.
+- **Links:**
+  - A time opens that onboarder's booking form for that exact time (`/<event>/<UTC start>`).
+  - **Book** opens their whole calendar.
+  - Both pre-fill `name`, `email`, `a1` (the registered-email question), `a2` (the phone question,
+    `+1` added to 10-digit numbers) and `salesforce_uuid` (only when it looks like an Account ID, `001…`).
+  - The salesforce_uuid lets `CalendlyWebhookHandler` attach the booking to the exact account.
+  - A booking through the onboarder's personal link makes them the account's onboarding owner,
+    which also stops the agent.
+  - Prefill and the exact-time path were checked in Chrome on 2026-10-27, up to the form, without booking.
+- **Warnings shown:**
+  - the ranking is over 3 hours old (the same age at which the pick tool warns);
+  - the pool is ranked by room left because nobody is both under capacity and open soon (mode is not `NORMAL`).
+- **Not on the page yet:** whether the agent already picked someone for this customer. Those picks
+  live only in the n8n table "Onboarding Assignments", which this site can't read.
 Cards and table rows are clickable; a `›` chevron marks anything that drills.
 
 The overview intentionally mirrors the sales tracker — four KPI tiles, then status-coded cards
