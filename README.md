@@ -36,12 +36,20 @@ arrive, the AE on the call books the kickoff here. `#/capacity/35` opens with 35
   as the smallest pool, the capacity model's rule.
 - **Times:** in ET, at least 2 hours away, from today through the second business day after today.
   These are the welcome text's rules. Up to six per onboarder.
+- **Required: units and the Salesforce account ID (GTM-2944).** The AE can paste the ID or the account's
+  Salesforce link; the page takes the 15- or 18-character `001…` ID out of it. Until a valid one is in, the
+  times and **Book** show but aren't links.
+  - Why: the `salesforce_uuid` lets `CalendlyWebhookHandler` attach the booking to exactly that account.
+    Without it, the handler matches by the email typed into Calendly. That finds the Contact with that email,
+    else the oldest account whose website contains the email's domain (an AE's own @doorloop.com email lands
+    on a real customer account), else nothing, and the booking ends up as an "unmatched booking".
 - **Links:**
   - A time opens that onboarder's booking form for that exact time (`/<event>/<UTC start>`).
   - **Book** opens their whole calendar.
   - Both pre-fill `name`, `email`, `a1` (the registered-email question), `a2` (the phone question,
-    `+1` added to 10-digit numbers) and `salesforce_uuid` (only when it looks like an Account ID, `001…`).
-  - The salesforce_uuid lets `CalendlyWebhookHandler` attach the booking to the exact account.
+    `+1` added to 10-digit numbers) and `salesforce_uuid` (the Account ID).
+  - Name, email and phone stay optional. The customer's own email is the one to use, because Calendly sends its
+    invite there.
   - A booking through the onboarder's personal link makes them the account's onboarding owner,
     which also stops the agent.
   - Prefill and the exact-time path were checked in Chrome on 2026-10-27, up to the form, without booking.

@@ -183,6 +183,10 @@
     padding:8px 14px; text-decoration:none; white-space:nowrap;
   }
   .pick-row.dim .pick-book { background:var(--card); color:var(--data); border:1px solid var(--border); }
+  /* no Account ID yet: times and Book show, but aren't links (GTM-2944) */
+  .pick-row .chip.locked, .pick-row .pick-book.locked {
+    color:var(--dim); background:var(--card); border:1px dashed var(--border); cursor:not-allowed;
+  }
 
   @media (max-width:720px){
     nav { padding:0 16px; }
@@ -762,14 +766,23 @@ function dayLabel(iso){
   return new Date(iso).toLocaleDateString('en-US',{timeZone:'America/New_York',weekday:'short'});
 }
 
+// The Account ID is required (GTM-2944): without salesforce_uuid the webhook falls back to the
+// invitee's email, which can attach the booking to the wrong account or to none. The AE may paste
+// the ID itself or the account's Salesforce address; either way the 15- or 18-character 001… ID is
+// taken out of it.
+function accountIdFrom(text){
+  const m = text.match(/(?:^|[^A-Za-z0-9])(001[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?)(?![A-Za-z0-9])/);
+  return m ? m[1] : '';
+}
 function capForm(){
   const v = id => (document.getElementById(id)?.value || '').trim();
   const u = v('cap-units');
   const units = /^\d+$/.test(u) ? Number(u) : null;
-  const account = v('cap-account');
+  const accountText = v('cap-account');
+  const account = accountIdFrom(accountText);
   return {
-    units, name:v('cap-name'), email:v('cap-email'), phone:v('cap-phone'), account,
-    accountOk: /^001[A-Za-z0-9]{12}([A-Za-z0-9]{3})?$/.test(account),
+    units, name:v('cap-name'), email:v('cap-email'), phone:v('cap-phone'), accountText, account,
+    accountOk: account !== '',
   };
 }
 // US/Canada numbers to +1XXXXXXXXXX, which Calendly's phone question accepts; anything else as typed.
@@ -805,9 +818,9 @@ async function renderCapacity(key){
           <label>Customer name<input id="cap-name" autocomplete="off" placeholder="First and last name"></label>
           <label>Registered email<input id="cap-email" type="email" autocomplete="off" placeholder="name@company.com"></label>
           <label>Phone<input id="cap-phone" type="tel" autocomplete="off" placeholder="(555) 555-5555"></label>
-          <label>Salesforce account ID<input id="cap-account" autocomplete="off" placeholder="001…"></label>
+          <label>Salesforce account ID (required)<input id="cap-account" autocomplete="off" placeholder="001… or the account’s Salesforce link"></label>
         </div>
-        <p class="cap-hint" id="cap-hint">Only units are needed. The rest fills in the booking form so the kickoff lands on the right Salesforce account.</p>
+        <p class="cap-hint warn" id="cap-hint">Units and the Salesforce account ID are needed. Paste the ID, or the account’s Salesforce link, to turn the times into booking links. Name, email and phone are optional.</p>
       </div>
       <div id="cap-results"><div class="state-msg">Loading capacity…</div></div>`;
     if(/^\d+$/.test(key || '')) document.getElementById('cap-units').value = key;
@@ -823,11 +836,12 @@ function renderCapResults(){
   document.getElementById('run-meta').innerHTML = ranAt ? `Capacity as of<br><strong>${etDateTime(ranAt)} ET</strong>` : 'No capacity run yet';
   const f = capForm();
   const hint = document.getElementById('cap-hint');
-  const badAccount = f.account && !f.accountOk;
-  hint.classList.toggle('warn', !!badAccount);
-  hint.textContent = badAccount
-    ? 'That isn’t a Salesforce account ID (they start with 001), so it won’t be sent. Calendly will match the booking by email instead.'
-    : 'Only units are needed. The rest fills in the booking form so the kickoff lands on the right Salesforce account.';
+  hint.classList.toggle('warn', !f.accountOk);
+  hint.textContent = f.accountOk
+    ? `The kickoff will land on Salesforce account ${f.account}. Name, email and phone fill in the booking form; use the customer’s own email so Calendly’s invite reaches them.`
+    : f.accountText
+      ? 'That isn’t a Salesforce account ID (they start with 001). Paste the ID, or the account’s Salesforce link, to turn the times into booking links.'
+      : 'Units and the Salesforce account ID are needed. Paste the ID, or the account’s Salesforce link, to turn the times into booking links. Name, email and phone are optional.';
 
   if(capError){ box.innerHTML = `<div class="state-msg">⚠️ Couldn’t load capacity: ${esc(capError)}</div>`; return; }
   if(!capStack.length){ box.innerHTML = `<div class="state-msg">No capacity run is stored yet.</div>`; return; }
@@ -847,15 +861,20 @@ function renderCapResults(){
     const room = r.over_capacity
       ? `<span class="badge warning">⚠️ ${head !== null && head < 0 ? `Over by ${Math.abs(head).toFixed(1)} h` : 'Full'}</span>`
       : `<span class="badge good">✅ ${head === null ? '—' : head.toFixed(1)} h free</span>`;
+    const chip = iso => f.accountOk
+      ? `<a class="chip" href="${esc(bookingUrl(r.kickoff_link, f, iso))}" target="_blank" rel="noopener">${dayLabel(iso)} ${etTime(iso)}</a>`
+      : `<span class="chip locked" title="Enter the Salesforce account ID first">${dayLabel(iso)} ${etTime(iso)}</span>`;
     const times = soon.length
-      ? soon.slice(0,6).map(iso=>`<a class="chip" href="${esc(bookingUrl(r.kickoff_link, f, iso))}" target="_blank" rel="noopener">${dayLabel(iso)} ${etTime(iso)}</a>`).join('')
+      ? soon.slice(0,6).map(chip).join('')
       : `<span class="pick-none">${slots.length ? `No time before ${esc(dayLabel(slots[0]))} · next ${etDateTime(slots[0])} ET` : 'No open kickoff time found'}</span>`;
     const dim = !r.bookable || !soon.length;
     return `<div class="pick-row ${r.rank === 1 && !dim ? 'best' : ''} ${dim ? 'dim' : ''}">
       <div class="pick-rank">${r.rank}</div>
       <div class="pick-who"><strong>${esc(r.name)}</strong>${room}</div>
       <div class="pick-times">${times}</div>
-      <a class="pick-book" href="${esc(bookingUrl(r.kickoff_link, f))}" target="_blank" rel="noopener">Book ›</a>
+      ${f.accountOk
+        ? `<a class="pick-book" href="${esc(bookingUrl(r.kickoff_link, f))}" target="_blank" rel="noopener">Book ›</a>`
+        : `<span class="pick-book locked" title="Enter the Salesforce account ID first">Book ›</span>`}
     </div>`;
   }).join('');
 
@@ -865,8 +884,8 @@ function renderCapResults(){
     ${relaxed ? `<div class="note">Nobody in this pool is both under capacity and open soon, so they’re ranked by who has the most room left.</div>` : ''}
     <div class="pick">${list || '<div class="state-msg">No onboarders in this pool.</div>'}</div>
     <div class="note">
-      Go down the list and book the first onboarder with a time the customer accepts. Click a time to open the
-      booking form for it, or <strong>Book</strong> for that onboarder’s whole calendar. Times were open at the last
+      Go down the list and book the first onboarder with a time the customer accepts. Once the account ID is in,
+      click a time to open the booking form for it, or <strong>Book</strong> for that onboarder’s whole calendar. Times were open at the last
       capacity run, so if Calendly says a time is gone, pick another. If the customer already got a text from an
       onboarder, book with that onboarder.
     </div>`;
